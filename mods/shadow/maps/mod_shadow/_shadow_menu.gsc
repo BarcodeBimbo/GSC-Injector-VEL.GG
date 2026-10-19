@@ -1,4 +1,4 @@
-/* SHADOW GARDEN GSC - BO1 Zombies v0.6.1 */
+/* SHADOW GARDEN GSC - BO1 Zombies v1.0.0 */
 
 #include common_scripts\utility;
 #include maps\_utility;
