@@ -1,9 +1,7 @@
-/* SHADOW GARDEN GSC - BO1 Zombies v1.0.0 */
+/* SHADOW GARDEN GSC - BO1 Zombies v1.0.2 */
 
 #include common_scripts\utility;
 #include maps\_utility;
-
-// The browser build needs direct HUD fields, not maps\_hud_util.
 
 shadow_player_init()
 {
@@ -15,24 +13,18 @@ shadow_player_init()
     self.shadow_running = true;
     self.shadow_open = false;
     self.shadow_closing = false;
-    self.shadow_lock_controls = false;
     self.shadow_was_ignored = false;
     self.shadow_menu_invuln_applied = false;
     self.shadow_page = 0;
     self.shadow_cursor = 0;
     self.shadow_window = 0;
-    self.shadow_visible_rows = 5;
+    self.shadow_visible_rows = 8;
     self.shadow_rows = [];
     self.shadow_items = [];
     self.shadow_item_values = [];
 
     self.shadow_god = false;
     self.shadow_user_notarget = false;
-    self.shadow_noclip = false;
-    self.shadow_noclip_speed = 8;
-    self.shadow_noclip_bind = 1;
-    self.shadow_noclip_worker_running = false;
-    self.shadow_noclip_return = undefined;
     self.shadow_spawn_origin = undefined;
     self.shadow_room_slots = [];
     self.shadow_map_spots = [];
@@ -41,12 +33,13 @@ shadow_player_init()
     self.shadow_fx_enabled = false;
     self.shadow_fx_style = 0;
     self.shadow_last_fx = -10000;
+    self.shadow_nuke_rounds = false;
+    self.shadow_last_nuke_shot = -10000;
     self.shadow_speed = false;
     self.shadow_auto_refill = false;
     self.shadow_infinite_clip = false;
     self.shadow_ammo_mode = 0;
     self.shadow_one_hit = false;
-    self.shadow_ammo_last_attack = false;
     self.shadow_zombie_counter = false;
     self.shadow_count_hud = undefined;
     self.shadow_saved_origin = undefined;
@@ -55,20 +48,24 @@ shadow_player_init()
     self.shadow_aim_always = false;
     self.shadow_aim_bone = "j_head";
     self.shadow_key_mode = 0;
-    self.shadow_key_repeat = 165;
+    self.shadow_noclip_bind = 1;
+    self.shadow_noclip_active = false;
+    self.shadow_key_repeat = 215;
     self.shadow_invert_scroll = false;
     self.shadow_swap_horizontal = false;
-    self.shadow_panel_opacity = 0.96;
-    self.shadow_animations = true;
+    self.shadow_color_r = 0.87;
+    self.shadow_color_g = 0.19;
+    self.shadow_color_b = 0.36;
+    self.shadow_last_powerup_drop = -5000;
+    self.shadow_palette = 0;
     self.shadow_low_effects = false;
-    self.shadow_toast_enabled = true;
-    self.shadow_extra_shaders = true;
+    self.shadow_selection_visible = true;
+    self.shadow_scrollbar_visible = true;
     self.shadow_busy_defcon = false;
     self.shadow_busy_doors = false;
     self.shadow_busy_clear = false;
     self.shadow_defcon_last = -10000;
     self.shadow_menu_auto_protect = true;
-    self.shadow_watermark_visible = true;
     self.shadow_achievement_survivor = false;
     self.shadow_achievement_veteran = false;
     self.shadow_achievement_rich = false;
@@ -79,11 +76,9 @@ shadow_player_init()
     self thread shadow_refill_loop();
     self thread shadow_aimbot_loop();
     self thread shadow_counter_loop();
-    self thread shadow_watermark_loop();
     self thread shadow_ammo_effect_loop();
     self thread shadow_achievement_loop();
     self thread shadow_one_hit_loop();
-    self thread shadow_menu_lock_loop();
     self thread shadow_safety_watchdog();
 }
 
@@ -95,10 +90,10 @@ shadow_safety_watchdog()
     {
         if (self.shadow_open && !self.shadow_closing &&
             (!isDefined(self.shadow_bg) || !isDefined(self.shadow_title) ||
+            !isDefined(self.shadow_section) ||
             !isDefined(self.shadow_selection) ||
             self.shadow_rows.size != self.shadow_visible_rows))
         {
-            self.shadow_animations = false;
             self shadow_close();
             self iPrintLn("^1SHADOW ^7HUD recovered from an incomplete state");
         }
@@ -116,7 +111,6 @@ shadow_input_loop()
     old_use = false;
     old_right = false;
     old_left = false;
-    old_noclip_combo = false;
     next_nav = 0;
 
     for (;;)
@@ -130,24 +124,9 @@ shadow_input_loop()
         {
             if (ads && melee && (!old_ads || !old_melee))
                 self shadow_show();
-            else
-            {
-                noclip_bind = false;
-                if (self.shadow_noclip_bind == 1)
-                    noclip_bind = ads && self jumpButtonPressed();
-                else if (self.shadow_noclip_bind == 2)
-                    noclip_bind = use && self jumpButtonPressed();
-                else if (self.shadow_noclip_bind == 3)
-                    noclip_bind = use && melee;
-
-                if (noclip_bind && !old_noclip_combo)
-                    self shadow_toggle_noclip();
-                old_noclip_combo = noclip_bind;
-            }
         }
         else
         {
-            old_noclip_combo = false;
 
             movement = self getNormalizedMovement();
             w = movement[0] > 0.50;
@@ -201,25 +180,6 @@ shadow_input_loop()
     }
 }
 
-// Keep movement locked without blocking menu input.
-shadow_menu_lock_loop()
-{
-    self endon("disconnect");
-    for (;;)
-    {
-        if (self.shadow_open && self.shadow_lock_controls)
-        {
-            self setVelocity((0, 0, 0));
-            if (distance(self.origin, self.shadow_lock_origin) > 0.25)
-                self setOrigin(self.shadow_lock_origin);
-            self setPlayerAngles(self.shadow_lock_angles);
-            wait 0.016;
-        }
-        else
-            wait 0.10;
-    }
-}
-
 shadow_show()
 {
     if (self.shadow_open || self.shadow_closing)
@@ -229,13 +189,10 @@ shadow_show()
     self.shadow_page = 0;
     self.shadow_cursor = 0;
     self.shadow_window = 0;
-    self.shadow_lock_controls = true;
-    self.shadow_lock_origin = self.origin;
-    self.shadow_lock_angles = self getPlayerAngles();
     if (!isDefined(self.shadow_spawn_origin))
         self.shadow_spawn_origin = self.origin;
     self setVelocity((0, 0, 0));
-    self setMoveSpeedScale(0);
+    self freezeControls(true);
     self.shadow_was_ignored = isDefined(self.ignoreme) && self.ignoreme;
     self.shadow_menu_invuln_applied = false;
     if (self.shadow_menu_auto_protect)
@@ -247,72 +204,40 @@ shadow_show()
     self disableWeapons();
     self shadow_define_page();
 
-    // Keep HUD allocations low so the full option list renders.
-    self.shadow_bg = self shadow_center_bar(0, 38, 272, 288,
-        (0.018, 0.020, 0.031), self.shadow_panel_opacity, 3);
-    self.shadow_top = self shadow_center_bar(0, 38, 270, 67,
+    self.shadow_bg = self shadow_center_bar(0, 38, 372, 362,
+        (0.018, 0.020, 0.031), 0.94, 3);
+    self.shadow_top = self shadow_center_bar(0, 38, 366, 69,
         (0.105, 0.027, 0.060), 0.98, 4);
-    self.shadow_selection = self shadow_center_bar(0, 143, 250, 23,
+    self.shadow_edge = self shadow_center_bar(-183, 38, 5, 362,
+        self shadow_accent(), 1, 5);
+    self.shadow_rule = self shadow_center_bar(0, 106, 346, 2,
+        self shadow_accent(), 0.90, 5);
+    self.shadow_selection = self shadow_center_bar(0, 143, 338, 24,
         (0.33, 0.035, 0.095), 0.94, 5);
-    if (self.shadow_extra_shaders && !self.shadow_low_effects)
-    {
-        self.shadow_scroll_thumb = self shadow_center_bar(122, 151, 3, 22,
-            (1, 0.25, 0.39), 0.96, 6);
-    }
+    self.shadow_scroll_thumb = self shadow_center_bar(174, 146, 3, 19,
+        self shadow_accent(), 0.95, 6);
 
-    self.shadow_title = self shadow_center_text("SHADOW GARDEN", -119, 51, 1.45,
-        (1, 0.94, 0.96), 7);
-    // Font scales below 1.0 render incorrectly in the browser build.
-    self.shadow_subtitle = self shadow_center_text("BLACK OPS ZOMBIES / GSC", -119, 80,
-        1.05, (0.95, 0.40, 0.47), 7);
-    self.shadow_section = self shadow_center_text("MAIN MENU", -119, 115,
-        1.05, (0.98, 0.70, 0.77), 7);
-    self.shadow_page_count = self shadow_center_text("1 / 1", 93, 115,
-        1.05, (0.65, 0.55, 0.62), 7);
+    self.shadow_title = self shadow_center_text("SHADOW GARDEN", -166, 52, 1.68,
+        (1, 1, 1), 7);
+    self.shadow_subtitle = self shadow_center_text("GSC MENU / BLACK OPS ZOMBIES", -165, 82,
+        1.05, self shadow_accent(), 7);
+    self.shadow_section = self shadow_center_text("MAIN MENU", -165, 117,
+        1.08, self shadow_accent(), 7);
+    self.shadow_page_count = self shadow_center_text("1 / 1", 127, 117,
+        1.05, (0.85, 0.85, 0.85), 7);
 
     for (i = 0; i < self.shadow_visible_rows; i++)
-        self.shadow_rows[i] = self shadow_center_text(" ", -110, 146 + (i * 24),
-            1.08, (0.93, 0.91, 0.94), 7);
-
-    self.shadow_footer = self shadow_center_text("W/S SCROLL   D SELECT   A BACK", -119, 274,
-        1.05, (0.87, 0.77, 0.82), 7);
-    self.shadow_exit = self shadow_center_text("MELEE CLOSE   /   ADS+MELEE OPEN", -119, 296,
-        1.05, (1, 0.40, 0.49), 7);
-
-    if (self.shadow_toast_enabled)
     {
-        self.shadow_open_toast = self shadow_center_text("ShadowGarden Menu By Joshua",
-            -119, 11, 1.05, (1, 0.86, 0.90), 9);
-        self thread shadow_open_toast_life();
+        self.shadow_rows[i] = self shadow_center_text(" ", -158, 146 + (i * 24),
+            1.08, (1, 1, 1), 7);
     }
 
-    if (self.shadow_animations)
-    {
-        self.shadow_bg.alpha = 0;
-        self.shadow_bg fadeOverTime(0.16);
-        self.shadow_bg.alpha = self.shadow_panel_opacity;
-        self.shadow_top.alpha = 0;
-        self.shadow_top fadeOverTime(0.16);
-        self.shadow_top.alpha = 0.98;
-    }
+    self.shadow_footer = self shadow_center_text("W/S MOVE   D SELECT   A BACK", -164, 346,
+        1.05, (0.85, 0.85, 0.85), 7);
+    self.shadow_exit = self shadow_center_text("MELEE CLOSES MENU", -164, 370,
+        1.05, (0.85, 0.85, 0.85), 7);
 
     self shadow_paint_page();
-}
-
-shadow_open_toast_life()
-{
-    self endon("disconnect");
-    self endon("shadow_menu_closed");
-    wait 1.65;
-    if (isDefined(self.shadow_open_toast))
-    {
-        self.shadow_open_toast fadeOverTime(0.35);
-        self.shadow_open_toast.alpha = 0;
-    }
-    wait 0.36;
-    if (isDefined(self.shadow_open_toast))
-        self.shadow_open_toast destroy();
-    self.shadow_open_toast = undefined;
 }
 
 shadow_close()
@@ -322,8 +247,9 @@ shadow_close()
 
     self.shadow_open = false;
     self.shadow_closing = true;
-    self.shadow_lock_controls = false;
     self notify("shadow_menu_closed");
+    self freezeControls(false);
+    self setVelocity((0, 0, 0));
     self enableWeapons();
     if (self.shadow_speed)
         self setMoveSpeedScale(1.5);
@@ -334,17 +260,6 @@ shadow_close()
         self disableInvulnerability();
     self.shadow_menu_invuln_applied = false;
 
-    if (self.shadow_animations)
-    {
-        self.shadow_bg fadeOverTime(0.10);
-        self.shadow_bg.alpha = 0;
-        self.shadow_top fadeOverTime(0.10);
-        self.shadow_top.alpha = 0;
-        self.shadow_selection fadeOverTime(0.10);
-        self.shadow_selection.alpha = 0;
-        wait 0.10;
-    }
-
     for (i = 0; i < self.shadow_visible_rows; i++)
     {
         if (isDefined(self.shadow_rows[i]))
@@ -353,10 +268,12 @@ shadow_close()
 
     if (isDefined(self.shadow_exit))
         self.shadow_exit destroy();
-    if (isDefined(self.shadow_open_toast))
-        self.shadow_open_toast destroy();
     if (isDefined(self.shadow_footer))
         self.shadow_footer destroy();
+    if (isDefined(self.shadow_scroll_thumb))
+        self.shadow_scroll_thumb destroy();
+    if (isDefined(self.shadow_selection))
+        self.shadow_selection destroy();
     if (isDefined(self.shadow_section))
         self.shadow_section destroy();
     if (isDefined(self.shadow_page_count))
@@ -365,10 +282,10 @@ shadow_close()
         self.shadow_subtitle destroy();
     if (isDefined(self.shadow_title))
         self.shadow_title destroy();
-    if (isDefined(self.shadow_selection))
-        self.shadow_selection destroy();
-    if (isDefined(self.shadow_scroll_thumb))
-        self.shadow_scroll_thumb destroy();
+    if (isDefined(self.shadow_rule))
+        self.shadow_rule destroy();
+    if (isDefined(self.shadow_edge))
+        self.shadow_edge destroy();
     if (isDefined(self.shadow_top))
         self.shadow_top destroy();
     if (isDefined(self.shadow_bg))
@@ -380,15 +297,16 @@ shadow_close()
     self.shadow_cursor = 0;
     self.shadow_window = 0;
     self.shadow_closing = false;
-    self.shadow_exit = undefined;
-    self.shadow_open_toast = undefined;
     self.shadow_footer = undefined;
+    self.shadow_exit = undefined;
+    self.shadow_scroll_thumb = undefined;
+    self.shadow_selection = undefined;
     self.shadow_section = undefined;
     self.shadow_page_count = undefined;
     self.shadow_subtitle = undefined;
     self.shadow_title = undefined;
-    self.shadow_selection = undefined;
-    self.shadow_scroll_thumb = undefined;
+    self.shadow_rule = undefined;
+    self.shadow_edge = undefined;
     self.shadow_top = undefined;
     self.shadow_bg = undefined;
 }
@@ -441,16 +359,18 @@ shadow_parent_page(page)
         return self.shadow_five_parent;
     if (page == 2 || page == 3 || page == 9 || page == 22)
         return 13;
-    if (page == 4 || page == 5)
+    if (page == 4 || page == 5 || page == 27)
         return 14;
     if (page == 24)
         return 4;
-    if (page == 6 || page == 10)
+    if (page == 6 || page == 10 || page == 25)
         return 15;
     if (page == 17 || page == 23)
         return 6;
     if (page == 8 || page == 12)
         return 16;
+    if (page == 26)
+        return 19;
     if (page == 11 || page == 19 || page == 21)
         return 20;
     return 0;
@@ -484,23 +404,20 @@ shadow_define_page()
         else
             self.shadow_items[1] = "No Target: OFF";
 
-        if (self.shadow_noclip)
-            self.shadow_items[2] = "NoClip: ON";
-        else
-            self.shadow_items[2] = "NoClip: OFF";
-
-        self.shadow_items[3] = "NoClip Speed: " + self.shadow_noclip_speed;
+        self.shadow_items[2] = "NoClip: " + self shadow_on_off(self.shadow_noclip_active);
+        self.shadow_items[3] = "NoClip Bind: " + self shadow_noclip_bind_name();
         if (self.shadow_speed)
             self.shadow_items[4] = "Speed Boost: ON";
         else
             self.shadow_items[4] = "Speed Boost: OFF";
         self.shadow_items[5] = "Restore Health";
-        self.shadow_items[6] = "Return to NoClip Start";
+        self.shadow_items[6] = "Save Spawn / Return in TP Menu";
         self.shadow_items[7] = "Reset Player Options";
         self.shadow_items[8] = "< Back";
     }
     else if (self.shadow_page == 2)
     {
+        self shadow_add_option("Death Machine", "minigun_zm");
         self shadow_add_weapon("ray_gun_zm", "Ray Gun");
         self shadow_add_weapon("ak74u_zm", "AK74u");
         self shadow_add_weapon("mp40_zm", "MP40");
@@ -582,9 +499,9 @@ shadow_define_page()
             self.shadow_items[1] = "Unfair Aimbot: OFF";
 
         if (self.shadow_aim_always)
-            self.shadow_items[2] = "Activation: Always";
+            self.shadow_items[2] = "Classic Aim: Always";
         else
-            self.shadow_items[2] = "Activation: ADS";
+            self.shadow_items[2] = "Classic Aim: ADS";
 
         if (self.shadow_aim_bone == "j_head")
             self.shadow_items[3] = "Target: Head";
@@ -684,6 +601,7 @@ shadow_define_page()
     {
         self shadow_add_option("Zombie Controls", 4);
         self shadow_add_option("Add Points", 5);
+        self shadow_add_option("Spawn Power-Ups", 27);
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 15)
@@ -693,6 +611,7 @@ shadow_define_page()
             self shadow_add_option("Doors / Power", 10);
         if (getDvar("mapname") == "zombie_pentagon")
             self shadow_add_option("Five: Rooms / DEFCON", 18);
+        self shadow_add_option("Change Map (Shift+M)", 25);
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 16)
@@ -724,12 +643,10 @@ shadow_define_page()
     }
     else if (self.shadow_page == 19)
     {
-        self.shadow_items[0] = "Animations: " + self shadow_on_off(self.shadow_animations);
-        self.shadow_items[1] = "Rainbow Name: " + self shadow_on_off(self.shadow_watermark_visible);
-        self.shadow_items[2] = "Panel Opacity: " + self.shadow_panel_opacity;
-        self.shadow_items[3] = "Extra Background Shaders: " + self shadow_on_off(self.shadow_extra_shaders);
-        self.shadow_items[4] = "Open HUD Credit: " + self shadow_on_off(self.shadow_toast_enabled);
-        self.shadow_items[5] = "< Back";
+        self.shadow_items[0] = "Selection Highlight: " + self shadow_on_off(self.shadow_selection_visible);
+        self.shadow_items[1] = "Side Scrollbar: " + self shadow_on_off(self.shadow_scrollbar_visible);
+        self.shadow_items[2] = "Custom Accent Colors";
+        self.shadow_items[3] = "< Back";
     }
     else if (self.shadow_page == 20)
     {
@@ -750,7 +667,8 @@ shadow_define_page()
         self.shadow_items[0] = "Impact FX: " + self shadow_on_off(self.shadow_fx_enabled);
         self.shadow_items[1] = "Effect: " + self shadow_fx_name();
         self.shadow_items[2] = "Ammo Damage Mode: " + self shadow_ammo_mode_name();
-        self.shadow_items[3] = "< Back";
+        self.shadow_items[3] = "Nuke Rounds: " + self shadow_on_off(self.shadow_nuke_rounds);
+        self.shadow_items[4] = "< Back";
     }
     else if (self.shadow_page == 23)
     {
@@ -766,6 +684,33 @@ shadow_define_page()
         self.shadow_items[4] = "Clear All Spawned Zombies";
         self.shadow_items[5] = "< Back";
     }
+    else if (self.shadow_page == 25)
+    {
+        self.shadow_items[0] = "Open launcher: SHIFT + M";
+        self.shadow_items[1] = "Pick the new map in the panel";
+        self.shadow_items[2] = "Press Change Map";
+        self.shadow_items[3] = "Reload the loader on new page";
+        self.shadow_items[4] = "< Back";
+    }
+    else if (self.shadow_page == 26)
+    {
+        self.shadow_items[0] = "Red: " + self.shadow_color_r;
+        self.shadow_items[1] = "Green: " + self.shadow_color_g;
+        self.shadow_items[2] = "Blue: " + self.shadow_color_b;
+        self.shadow_items[3] = "Cycle Color Presets";
+        self.shadow_items[4] = "Restore Shadow Red";
+        self.shadow_items[5] = "< Back";
+    }
+    else if (self.shadow_page == 27)
+    {
+        self.shadow_items[0] = "Spawn Active Nuke";
+        self.shadow_items[1] = "Spawn Max Ammo";
+        self.shadow_items[2] = "Spawn Insta-Kill";
+        self.shadow_items[3] = "Spawn Double Points";
+        self.shadow_items[4] = "Spawn Carpenter";
+        self.shadow_items[5] = "Spawn Fire Sale";
+        self.shadow_items[6] = "< Back";
+    }
 }
 
 shadow_on_off(value)
@@ -776,10 +721,58 @@ shadow_on_off(value)
 
 shadow_noclip_bind_name()
 {
-    if (self.shadow_noclip_bind == 1) return "ADS + JUMP";
-    if (self.shadow_noclip_bind == 2) return "USE + JUMP";
-    if (self.shadow_noclip_bind == 3) return "USE + MELEE";
+    if (self.shadow_noclip_bind == 1) return "MOUSE4";
+    if (self.shadow_noclip_bind == 2) return "MOUSE5";
+    if (self.shadow_noclip_bind == 3) return "F6";
     return "OFF";
+}
+
+shadow_noclip_bind_key(value)
+{
+    if (value == 1) return "MOUSE4";
+    if (value == 2) return "MOUSE5";
+    if (value == 3) return "F6";
+    return "";
+}
+
+shadow_cycle_noclip_bind()
+{
+    old_key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
+    self.shadow_noclip_bind++;
+    if (self.shadow_noclip_bind > 3)
+        self.shadow_noclip_bind = 0;
+    new_key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
+    if (self.shadow_noclip_active)
+    {
+        command = "";
+        if (old_key != "")
+            command = "unbind " + old_key;
+        if (new_key != "")
+        {
+            if (command != "")
+                command += ";";
+            command += "bind " + new_key + " noclip";
+        }
+        if (command != "")
+            self setClientDvar("activeAction", command);
+    }
+}
+
+shadow_request_noclip()
+{
+    self.shadow_noclip_active = !self.shadow_noclip_active;
+    key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
+    if (self.shadow_noclip_active)
+    {
+        if (key != "")
+            self setClientDvar("activeAction", "bind " + key + " noclip;noclip");
+        else
+            self setClientDvar("activeAction", "noclip");
+    }
+    else if (key != "")
+        self setClientDvar("activeAction", "unbind " + key + ";noclip");
+    else
+        self setClientDvar("activeAction", "noclip");
 }
 
 shadow_fx_name()
@@ -817,6 +810,9 @@ shadow_page_name()
     if (self.shadow_page == 22) return "CUSTOM WEAPON FX";
     if (self.shadow_page == 23) return "MAP LOCATIONS";
     if (self.shadow_page == 24) return "ZOMBIE SPAWNER";
+    if (self.shadow_page == 25) return "CHANGE MAP";
+    if (self.shadow_page == 26) return "CUSTOM COLORS";
+    if (self.shadow_page == 27) return "POWER-UPS / NUKES";
     return "MAIN MENU";
 }
 
@@ -895,9 +891,9 @@ shadow_paint_page()
 
     self.shadow_section setText(self shadow_page_name());
     if (self.shadow_key_mode == 0 && self.shadow_swap_horizontal)
-        self.shadow_footer setText("W/S SCROLL   A SELECT   D BACK");
+        self.shadow_footer setText("W/S MOVE   A SELECT   D BACK");
     else if (self.shadow_key_mode == 0)
-        self.shadow_footer setText("W/S SCROLL   D SELECT   A BACK");
+        self.shadow_footer setText("W/S MOVE   D SELECT   A BACK");
     else
         self.shadow_footer setText("FIRE DOWN  ADS UP  USE SELECT");
 
@@ -906,7 +902,6 @@ shadow_paint_page()
         item = i + self.shadow_window;
         if (item < self.shadow_items.size)
         {
-            self.shadow_rows[i] setText(self.shadow_items[item]);
             self.shadow_rows[i].alpha = 1;
         }
         else
@@ -921,27 +916,39 @@ shadow_paint_page()
 
 shadow_paint_cursor()
 {
-    if (!self.shadow_open || !isDefined(self.shadow_selection))
+    if (!self.shadow_open || !isDefined(self.shadow_page_count))
         return;
 
-    if (self.shadow_animations)
-        self.shadow_selection moveOverTime(0.09);
-    self.shadow_selection.y = 143 + ((self.shadow_cursor - self.shadow_window) * 24);
+    position = self.shadow_cursor - self.shadow_window;
+    if (isDefined(self.shadow_selection))
+    {
+        self.shadow_selection.y = 143 + (position * 24);
+        if (self.shadow_selection_visible)
+            self.shadow_selection.alpha = 0.94;
+        else
+            self.shadow_selection.alpha = 0;
+    }
     if (isDefined(self.shadow_scroll_thumb))
     {
+        scroll_position = 0;
         if (self.shadow_items.size > 1)
-            self.shadow_scroll_thumb.y = 151 +
-                ((self.shadow_cursor * 96) / (self.shadow_items.size - 1));
+            scroll_position = (self.shadow_cursor * (self.shadow_visible_rows - 1)) /
+                (self.shadow_items.size - 1);
+        self.shadow_scroll_thumb.y = 146 + (scroll_position * 24);
+        if (self.shadow_scrollbar_visible)
+            self.shadow_scroll_thumb.alpha = 0.95;
         else
-            self.shadow_scroll_thumb.y = 151;
+            self.shadow_scroll_thumb.alpha = 0;
     }
     self.shadow_page_count setText((self.shadow_cursor + 1) + " / " + self.shadow_items.size);
     for (i = 0; i < self.shadow_visible_rows; i++)
     {
-        if (i + self.shadow_window == self.shadow_cursor)
-            self.shadow_rows[i].color = (1, 0.35, 0.44);
-        else
-            self.shadow_rows[i].color = (0.91, 0.90, 0.92);
+        item = i + self.shadow_window;
+        if (item < self.shadow_items.size)
+        {
+            self.shadow_rows[i] setText("  " + self.shadow_items[item]);
+            self.shadow_rows[i].color = (1, 1, 1);
+        }
     }
 }
 
@@ -990,13 +997,9 @@ shadow_activate()
                 (self.shadow_menu_auto_protect && self.shadow_open);
         }
         else if (index == 2)
-            self shadow_toggle_noclip();
+            self shadow_request_noclip();
         else if (index == 3)
-        {
-            self.shadow_noclip_speed += 5;
-            if (self.shadow_noclip_speed > 30)
-                self.shadow_noclip_speed = 5;
-        }
+            self shadow_cycle_noclip_bind();
         else if (index == 4)
         {
             self.shadow_speed = !self.shadow_speed;
@@ -1017,18 +1020,14 @@ shadow_activate()
             self iPrintLn("^1SHADOW ^7Health restored");
         }
         else if (index == 6)
-        {
-            if (isDefined(self.shadow_noclip_return))
-                self shadow_warp(self.shadow_noclip_return, "NoClip start");
-            else
-                self iPrintLn("^1SHADOW ^7NoClip start not saved");
-        }
+            self iPrintLn("^1SHADOW ^7Save and return with Teleport / World");
         else if (index == 7)
         {
             self.shadow_god = false;
             self.shadow_user_notarget = false;
-            self.shadow_noclip = false;
             self.shadow_speed = false;
+            if (self.shadow_noclip_active)
+                self shadow_request_noclip();
             self.ignoreme = self.shadow_was_ignored ||
                 (self.shadow_menu_auto_protect && self.shadow_open);
             if (!self.shadow_menu_invuln_applied)
@@ -1138,17 +1137,9 @@ shadow_activate()
     else if (page == 7)
     {
         if (index == 0)
-        {
             self.shadow_classic_aimbot = !self.shadow_classic_aimbot;
-            if (!self.shadow_classic_aimbot)
-                self.shadow_unfair_aimbot = false;
-        }
         else if (index == 1)
-        {
             self.shadow_unfair_aimbot = !self.shadow_unfair_aimbot;
-            if (self.shadow_unfair_aimbot)
-                self.shadow_classic_aimbot = true;
-        }
         else if (index == 2)
             self.shadow_aim_always = !self.shadow_aim_always;
         else if (index == 3)
@@ -1219,18 +1210,16 @@ shadow_activate()
         else if (index == 3)
             self.shadow_swap_horizontal = !self.shadow_swap_horizontal;
         else if (index == 4)
-        {
-            self.shadow_noclip_bind++;
-            if (self.shadow_noclip_bind > 3)
-                self.shadow_noclip_bind = 0;
-        }
+            self shadow_cycle_noclip_bind();
         else if (index == 5)
         {
             self.shadow_key_mode = 0;
-            self.shadow_key_repeat = 165;
+            self.shadow_key_repeat = 215;
             self.shadow_invert_scroll = false;
             self.shadow_swap_horizontal = false;
             self.shadow_noclip_bind = 1;
+            if (self.shadow_noclip_active)
+                self setClientDvar("activeAction", "unbind MOUSE5;unbind F6;bind MOUSE4 noclip");
         }
     }
     else if (page == 17)
@@ -1278,20 +1267,14 @@ shadow_activate()
     else if (page == 19)
     {
         if (index == 0)
-            self.shadow_animations = !self.shadow_animations;
+            self.shadow_selection_visible = !self.shadow_selection_visible;
         else if (index == 1)
-            self.shadow_watermark_visible = !self.shadow_watermark_visible;
+            self.shadow_scrollbar_visible = !self.shadow_scrollbar_visible;
         else if (index == 2)
         {
-            self.shadow_panel_opacity -= 0.09;
-            if (self.shadow_panel_opacity < 0.62)
-                self.shadow_panel_opacity = 0.96;
-            self.shadow_bg.alpha = self.shadow_panel_opacity;
+            self shadow_change_page(26);
+            return;
         }
-        else if (index == 3)
-            self.shadow_extra_shaders = !self.shadow_extra_shaders;
-        else if (index == 4)
-            self.shadow_toast_enabled = !self.shadow_toast_enabled;
     }
     else if (page == 21)
     {
@@ -1330,6 +1313,8 @@ shadow_activate()
             if (self.shadow_ammo_mode > 4)
                 self.shadow_ammo_mode = 0;
         }
+        else if (index == 3)
+            self.shadow_nuke_rounds = !self.shadow_nuke_rounds;
     }
     else if (page == 23)
     {
@@ -1347,6 +1332,42 @@ shadow_activate()
             self shadow_queue_zombies(10);
         else if (index == 4)
             self thread shadow_clear_zombies();
+    }
+    else if (page == 25)
+        self iPrintLn("^1SHADOW ^7Press Shift+M to open the map launcher");
+    else if (page == 26)
+    {
+        if (index == 0)
+            self.shadow_color_r = self shadow_step_color(self.shadow_color_r);
+        else if (index == 1)
+            self.shadow_color_g = self shadow_step_color(self.shadow_color_g);
+        else if (index == 2)
+            self.shadow_color_b = self shadow_step_color(self.shadow_color_b);
+        else if (index == 3)
+            self shadow_next_palette();
+        else if (index == 4)
+        {
+            self.shadow_palette = 0;
+            self.shadow_color_r = 0.87;
+            self.shadow_color_g = 0.19;
+            self.shadow_color_b = 0.36;
+        }
+        self shadow_apply_theme();
+    }
+    else if (page == 27)
+    {
+        if (index == 0)
+            self shadow_spawn_powerup("nuke", true);
+        else if (index == 1)
+            self shadow_spawn_powerup("full_ammo", false);
+        else if (index == 2)
+            self shadow_spawn_powerup("insta_kill", false);
+        else if (index == 3)
+            self shadow_spawn_powerup("double_points", false);
+        else if (index == 4)
+            self shadow_spawn_powerup("carpenter", false);
+        else if (index == 5)
+            self shadow_spawn_powerup("fire_sale", false);
     }
     else if (page == 12)
     {
@@ -1560,8 +1581,9 @@ shadow_five_warp(spot)
 
 shadow_give_weapon(name, label)
 {
-    if (!isDefined(level.zombie_weapons) ||
-        !isDefined(level.zombie_weapons[name]))
+    if (name != "minigun_zm" &&
+        (!isDefined(level.zombie_weapons) ||
+        !isDefined(level.zombie_weapons[name])))
     {
         self iPrintLn("^1SHADOW ^7Weapon unavailable on this map");
         return;
@@ -1599,7 +1621,10 @@ shadow_refill_loop()
                 }
             }
         }
-        wait 0.16;
+        if (self.shadow_auto_refill || self.shadow_infinite_clip)
+            wait 0.18;
+        else
+            wait 0.60;
     }
 }
 
@@ -1610,8 +1635,17 @@ shadow_ammo_effect_loop()
     last_attack = false;
     while (self.shadow_running)
     {
+        if (self.shadow_ammo_mode == 0 && !self.shadow_fx_enabled &&
+            !self.shadow_nuke_rounds &&
+            !self.shadow_shoot_tp)
+        {
+            last_attack = false;
+            wait 0.18;
+            continue;
+        }
         attack = self attackButtonPressed();
         if ((self.shadow_ammo_mode > 0 || self.shadow_fx_enabled ||
+            self.shadow_nuke_rounds ||
             self.shadow_shoot_tp) && !self.shadow_open &&
             attack && !last_attack)
         {
@@ -1621,6 +1655,8 @@ shadow_ammo_effect_loop()
             if (isDefined(trace) && isDefined(trace["position"]))
             {
                 hit = trace["position"];
+                if (self.shadow_nuke_rounds)
+                    self shadow_trigger_shot_nuke();
                 if (self.shadow_fx_enabled &&
                     getTime() - self.shadow_last_fx >= 220)
                 {
@@ -1687,6 +1723,11 @@ shadow_burn_target(victim)
 {
     self endon("disconnect");
 
+    if (!isDefined(victim) || !isAlive(victim) ||
+        (isDefined(victim.shadow_burn_active) && victim.shadow_burn_active))
+        return;
+    victim.shadow_burn_active = true;
+
     for (tick = 0; tick < 5; tick++)
     {
         if (!isDefined(victim) || !isAlive(victim))
@@ -1694,6 +1735,8 @@ shadow_burn_target(victim)
         victim doDamage(75, victim.origin, self);
         wait 0.35;
     }
+    if (isDefined(victim))
+        victim.shadow_burn_active = false;
 }
 
 shadow_one_hit_loop()
@@ -1711,7 +1754,10 @@ shadow_one_hit_loop()
                     zombies[i].health = 1;
             }
         }
-        wait 0.5;
+        if (self.shadow_one_hit)
+            wait 0.5;
+        else
+            wait 1.0;
     }
 }
 
@@ -1762,12 +1808,12 @@ shadow_counter_loop()
     last_count = -1;
     while (self.shadow_running)
     {
-        if (self.shadow_zombie_counter)
+        if (self.shadow_zombie_counter && !self.shadow_open)
         {
             if (!isDefined(self.shadow_count_hud))
             {
-                self.shadow_count_hud = self shadow_text("ZOMBIES  0", 325, 65,
-                    1.00, (1, 0.32, 0.42), 8);
+                self.shadow_count_hud = self shadow_text("ZOMBIES  0", 18, 121,
+                    0.70, self shadow_accent(), 8);
                 last_count = -1;
             }
 
@@ -1779,57 +1825,16 @@ shadow_counter_loop()
             }
         }
         else
+        {
+            if (isDefined(self.shadow_count_hud))
+            {
+                self.shadow_count_hud destroy();
+                self.shadow_count_hud = undefined;
+            }
             last_count = -1;
+        }
 
         wait 0.5;
-    }
-}
-
-shadow_watermark_loop()
-{
-    self endon("disconnect");
-
-    self.shadow_watermark = newClientHudElem(self);
-    self.shadow_watermark.horzAlign = "right";
-    self.shadow_watermark.vertAlign = "top";
-    self.shadow_watermark.alignX = "right";
-    self.shadow_watermark.alignY = "top";
-    self.shadow_watermark.x = -20;
-    self.shadow_watermark.y = 20;
-    self.shadow_watermark.font = "default";
-    self.shadow_watermark.fontScale = 1.05;
-    self.shadow_watermark.alpha = 0.92;
-    self.shadow_watermark.sort = 6;
-    self.shadow_watermark.hideWhenInMenu = true;
-    self.shadow_watermark setText("SHADOW GARDEN");
-
-    colors = [];
-    colors[0] = (1, 0.25, 0.30);
-    colors[1] = (1, 0.47, 0.22);
-    colors[2] = (1, 0.78, 0.23);
-    colors[3] = (0.82, 1, 0.26);
-    colors[4] = (0.34, 1, 0.37);
-    colors[5] = (0.22, 1, 0.79);
-    colors[6] = (0.25, 0.78, 1);
-    colors[7] = (0.32, 0.44, 1);
-    colors[8] = (0.64, 0.36, 1);
-    colors[9] = (0.95, 0.27, 0.89);
-
-    index = 0;
-    for (;;)
-    {
-        self.shadow_watermark.color = colors[index];
-        if (self.shadow_watermark_visible)
-            self.shadow_watermark.alpha = 0.92;
-        else
-            self.shadow_watermark.alpha = 0;
-        index++;
-        if (index >= colors.size)
-            index = 0;
-        if (self.shadow_low_effects)
-            wait 1.0;
-        else
-            wait 0.20;
     }
 }
 
@@ -1840,19 +1845,32 @@ shadow_aimbot_loop()
     old_attack = false;
     for (;;)
     {
+        if ((!self.shadow_classic_aimbot && !self.shadow_unfair_aimbot) ||
+            self.shadow_open)
+        {
+            old_attack = false;
+            wait 0.18;
+            continue;
+        }
         attack = self attackButtonPressed();
 
-        if (self.shadow_classic_aimbot && !self.shadow_open &&
-            (self adsButtonPressed() || self.shadow_aim_always))
+        aim_active = self.shadow_classic_aimbot &&
+            (self adsButtonPressed() || self.shadow_aim_always);
+        shoot_active = self.shadow_unfair_aimbot && attack && !old_attack;
+
+        if (aim_active || shoot_active)
         {
             target = self shadow_nearest_zombie();
             if (isDefined(target))
             {
                 hit = target getTagOrigin(self.shadow_aim_bone);
-                eye = self getEye();
-                self setPlayerAngles(vectorToAngles(hit - eye));
+                if (aim_active)
+                {
+                    eye = self getEye();
+                    self setPlayerAngles(vectorToAngles(hit - eye));
+                }
 
-                if (self.shadow_unfair_aimbot && attack && !old_attack)
+                if (shoot_active)
                 {
                     weapon = self getCurrentWeapon();
                     if (isDefined(weapon) && weapon != "none")
@@ -1909,53 +1927,105 @@ shadow_clear_zombies()
     self.shadow_busy_clear = false;
 }
 
-shadow_toggle_noclip()
+shadow_accent()
 {
-    self.shadow_noclip = !self.shadow_noclip;
-    if (self.shadow_noclip)
+    return (self.shadow_color_r, self.shadow_color_g, self.shadow_color_b);
+}
+
+shadow_step_color(value)
+{
+    value += 0.16;
+    if (value > 1)
+        value = 0;
+    return value;
+}
+
+shadow_next_palette()
+{
+    self.shadow_palette++;
+    if (self.shadow_palette > 4)
+        self.shadow_palette = 0;
+    if (self.shadow_palette == 0)
     {
-        self.shadow_noclip_return = self.origin;
-        if (!self.shadow_noclip_worker_running)
-        {
-            self.shadow_noclip_worker_running = true;
-            self thread shadow_noclip_loop();
-        }
-        self iPrintLn("^1SHADOW ^7NoClip ON: WASD / Jump up / Melee down");
+        self.shadow_color_r = 0.87;
+        self.shadow_color_g = 0.19;
+        self.shadow_color_b = 0.36;
+    }
+    else if (self.shadow_palette == 1)
+    {
+        self.shadow_color_r = 0.30;
+        self.shadow_color_g = 0.68;
+        self.shadow_color_b = 1;
+    }
+    else if (self.shadow_palette == 2)
+    {
+        self.shadow_color_r = 0.50;
+        self.shadow_color_g = 0.96;
+        self.shadow_color_b = 0.28;
+    }
+    else if (self.shadow_palette == 3)
+    {
+        self.shadow_color_r = 0.88;
+        self.shadow_color_g = 0.38;
+        self.shadow_color_b = 1;
     }
     else
     {
-        self setVelocity((0, 0, 0));
-        self iPrintLn("^1SHADOW ^7NoClip OFF");
+        self.shadow_color_r = 1;
+        self.shadow_color_g = 0.68;
+        self.shadow_color_b = 0.20;
     }
 }
 
-shadow_noclip_loop()
+shadow_apply_theme()
 {
-    self endon("disconnect");
+    if (!self.shadow_open)
+        return;
+    if (isDefined(self.shadow_section))
+        self.shadow_section.color = self shadow_accent();
+    if (isDefined(self.shadow_subtitle))
+        self.shadow_subtitle.color = self shadow_accent();
+    if (isDefined(self.shadow_edge))
+        self.shadow_edge.color = self shadow_accent();
+    if (isDefined(self.shadow_rule))
+        self.shadow_rule.color = self shadow_accent();
+    if (isDefined(self.shadow_scroll_thumb))
+        self.shadow_scroll_thumb.color = self shadow_accent();
+    self shadow_paint_cursor();
+}
 
-    // Pause NoClip movement while the menu is open.
-    while (self.shadow_running && self.shadow_noclip)
+shadow_spawn_powerup(type, activate)
+{
+    if (!isDefined(level.zombie_powerups) ||
+        !isDefined(level.zombie_powerups[type]))
     {
-        if (!self.shadow_open && !self.shadow_lock_controls)
-        {
-            movement = self getNormalizedMovement();
-            angles = self getPlayerAngles();
-            forward = anglesToForward((0, angles[1], 0));
-            right = anglesToRight((0, angles[1], 0));
-            step = self.shadow_noclip_speed * 0.5;
-            next = self.origin + (forward * (movement[0] * step));
-            next += right * (movement[1] * step);
-            if (self jumpButtonPressed())
-                next += (0, 0, step);
-            if (self meleeButtonPressed())
-                next -= (0, 0, step);
-            self setVelocity((0, 0, 0));
-            if (distance(self.origin, next) > 0.02)
-                self setOrigin(next);
-        }
-        wait 0.025;
+        self iPrintLn("^1SHADOW ^7Power-up unavailable on this map");
+        return false;
     }
-    self.shadow_noclip_worker_running = false;
+    if (getTime() - self.shadow_last_powerup_drop < 1200)
+    {
+        self iPrintLn("^1SHADOW ^7Wait before spawning another power-up");
+        return false;
+    }
+    self.shadow_last_powerup_drop = getTime();
+    if (activate)
+        point = self.origin;
+    else
+        point = self.origin + (anglesToForward(self getPlayerAngles()) * 96);
+    level thread maps\_zombiemode_powerups::specific_powerup_drop(type, point);
+    self iPrintLn("^1SHADOW ^7Power-up spawned: " + type);
+    return true;
+}
+
+shadow_trigger_shot_nuke()
+{
+    if (!self.shadow_nuke_rounds || !isDefined(level.zombie_powerups) ||
+        !isDefined(level.zombie_powerups["nuke"]) ||
+        getTime() - self.shadow_last_nuke_shot < 1500)
+        return;
+
+    self.shadow_last_nuke_shot = getTime();
+    level thread maps\_zombiemode_powerups::specific_powerup_drop("nuke", self.origin);
 }
 
 shadow_teleport_to_crosshair()
@@ -2022,6 +2092,8 @@ shadow_center_text(value, x, y, scale, rgb, sort)
     elem.x = x;
     elem.y = y;
     elem.font = "default";
+    if (scale < 1.0)
+        scale = 1.05;
     elem.fontScale = scale;
     elem setText(value);
     elem.color = rgb;
@@ -2058,6 +2130,8 @@ shadow_text(value, x, y, scale, rgb, sort)
     elem.x = x;
     elem.y = y;
     elem.font = "default";
+    if (scale < 1.0)
+        scale = 1.05;
     elem.fontScale = scale;
     elem setText(value);
     elem.color = rgb;
@@ -2067,19 +2141,3 @@ shadow_text(value, x, y, scale, rgb, sort)
     return elem;
 }
 
-shadow_bar(x, y, width, height, rgb, alpha, sort)
-{
-    elem = newClientHudElem(self);
-    elem.horzAlign = "left";
-    elem.vertAlign = "top";
-    elem.alignX = "left";
-    elem.alignY = "top";
-    elem.x = x;
-    elem.y = y;
-    elem.sort = sort;
-    elem.color = rgb;
-    elem.alpha = alpha;
-    elem setShader("white", width, height);
-    elem.hideWhenInMenu = false;
-    return elem;
-}
