@@ -2,7 +2,7 @@
 
 Shadow Garden GSC is a standalone console loader and in-game menu for the browser version at [vel.gg/bsz](https://vel.gg/bsz). It does not need Tampermonkey, a proxy, or a replacement FastFile.
 
-Version 1.0.0. The loader passes static checks. Test the menu features in the game before relying on them.
+Version 10.2. Source and browser-loader smoke tests pass. In-game behavior still needs testing on the selected map.
 
 ## 1. Install SHADOW
 
@@ -33,40 +33,45 @@ Click **All 10 maps** to stage the GSC in the known map namespaces. This stages 
 | **A** | Back to the parent category |
 | Melee / Knife while menu is open | Close from any page |
 | Fire / ADS / Use | Down / Up / Select fallback (Classic bind preset) |
-| **ADS + Jump** (default) | Toggle NoClip outside the menu; choose another bind or OFF under Controls / HUD |
-| Controls / HUD | Navigation, NoClip key, shaders, banner, animation, protection, and low-effects setting |
+| **Mouse4** (default) | Native NoClip bind, active only if NoClip has been enabled in the GSC menu |
+| **Shift + M** | Toggle the launcher panel, including Change Map |
+| Controls / HUD | Navigation, NoClip key, single side scrollbar, accent colors, protection, and low-effects setting |
 
-The **SHADOW GARDEN** menu uses a five-row scrolling list, dark-red background, highlighted selection, and optional scrollbar. The opening message reads **ShadowGarden Menu By Joshua**.
+The **SHADOW GARDEN** menu uses the old dark panel, maroon header, thin accent stripe, and divider. A burgundy highlight fills the currently selected row. The eight text rows use the older working `default` font settings. A single slim scrollbar thumb moves inside the menu's right gutter; there are no extra text objects for the scrollbar. The centered welcome HUD shows **SHADOW GARDEN / BY JOSHUA** on lobby start. The top-left is reserved for map, solo host, local ping, FPS, player name, and the optional zombie counter. There are no opening/closing notices there.
 
-While the menu is open, walking, looking, and weapon use are locked. W and S still work for navigation. Temporary protection keeps zombies away, and God Mode that you enabled yourself stays on after the menu closes. A small colored name appears in the upper-right corner and can be hidden under Controls / HUD.
+While the menu is open, walking, looking, and weapon use are locked. W and S still work for navigation. Temporary protection keeps zombies away, and God Mode that you enabled yourself stays on after the menu closes. No decorative upper-right watermark is created.
 
 ### What's included
 
-- **Player / Movement:** God Mode, No Target, direct-position free-flight NoClip (WASD, Jump up, Melee down), configurable NoClip key bind, adjustable speed, speed boost, restore health, return to NoClip start, reset options.
+- **Player / Movement:** God Mode, No Target, NoClip ON/OFF and an in-menu Mouse4/Mouse5/F6/Off bind selector, speed boost, health, and reset. NoClip is OFF by default, and the loader does not inject any bind at startup. Death Machine remains in the weapons menu.
 - **Weapons:** Ray Gun, AK74u, MP40, Galil, HK21, RPK, M1911, Thundergun, Wunderwaffe, Winter's Howl, Scavenger, Wave Gun, and 31-79 JGb215. Entries are shown only when registered by the loaded map.
-- **Ammo / Custom FX:** refill current weapon, infinite reserve/magazine, drop weapon, cycle Normal / Explosive / Heavy / One-Hit / Burn impact damage, plus independently toggled Explosion / Tesla / Flame / Blood / Dust visual FX at traced shot impacts.
+- **Ammo / Custom FX:** refill current weapon, infinite reserve/magazine, drop weapon, cycle Normal / Explosive / Heavy / One-Hit / Burn impact damage, plus independently toggled Explosion / Tesla / Flame / Blood / Dust visual FX at traced shot impacts. **Nuke Rounds** is its own ON/OFF entry in Custom Weapon FX; after a qualifying Fire press, it creates a stock Nuke pickup at your position (capped to one every 1.5 seconds). No Nuke is triggered by a round timer.
 - **Perks:** Juggernog, Speed Cola, Double Tap, Quick Revive, Stamin-Up, PhD Flopper, Deadshot Daiquiri, Mule Kick; show only perk-machine entries found in the loaded map; give one, give all available, or clear perks.
-- **Zombies / Points:** clear live enemies, one-hit zombie toggle, live counter, active count, round info, points grants, and a capped queue of 1 / 5 / 10 stock-map zombies. The native round manager performs actual spawning; it is not an arbitrary-entity spawner.
-- **Aimbot:** Classic (aims at the nearest live zombie), Unfair (adds a magic bullet on a new Fire press), ADS-only/always-on targeting, head/torso target selection.
+- **Zombies / Points:** clear live enemies, one-hit toggle, compact live counter, current round, points grants, capped queue of 1 / 5 / 10 stock-map zombies, and registered stock Power-Ups (Nuke, Max Ammo, Insta-Kill, Double Points, Carpenter, and Fire Sale where supported).
+- **Aimbot:** Classic (moves your aim toward the nearest live zombie), Unfair (fires a scripted hit at a zombie on a new Fire press, independently of Classic), ADS-only/always-on settings for Classic, head/torso target selection shared by both.
 - **Points:** add 1,000 / 5,000 / 10,000 / 50,000 / 100,000.
-- **Teleport / World:** shoot at a solid surface to teleport there when Shoot to TP is enabled; crosshair teleport; saved location; three named in-session room bookmark slots; dynamically discovered starting room / power / Pack-a-Punch / perk-machine locations where the current map exposes those entities; unlock doors/debris and activate power on supported maps.
+- **Teleport / World:** shoot at a solid surface to teleport there when Shoot to TP is enabled; crosshair teleport; saved location; three named in-session room bookmark slots; dynamically discovered starting room / power / Pack-a-Punch / perk-machine locations where the current map exposes those entities; unlock doors/debris and activate power on supported maps; Change Map shortcut to the launcher.
 - **Five / Pack-a-Punch:** on `zombie_pentagon` only, trigger the four real DEFCON switches after power is enabled, report DEFCON state, and use exposed top-floor / War Room / labs / Panic Room portal destinations when initialized. DEFCON countdown and actual weapon upgrading still follow the map's normal mechanics.
-- **Controls / HUD:** WASD or classic navigation, inverted W/S, swapped A/D, repeat speed, NoClip bind (Off / ADS+Jump / Use+Jump / Use+Melee), panel opacity, selection and scrollbar shaders, HUD credit banner, low-effects mode, animation, protection, rainbow name.
+- **Controls / HUD:** WASD or classic button navigation, inverted W/S, swapped A/D, repeat speed, native NoClip key selection in the GSC menu, five accent presets plus adjustable red/green/blue channels, selection highlight toggle, slim side scrollbar, low-effects mode, and protection.
 - **Achievements:** five self-contained SHADOW session badges for reaching rounds 5/10, 10,000/100,000 points, and 100 kills (when kill data is available); unlock all or reset local badges. **Not** Steam/Activision/platform achievement unlocks.
 - **Information:** map name, current weapon, position, round.
-- **Close Shadow:** animate out and free owned HUD elements.
+- **Close Shadow:** remove owned HUD elements and restore controls.
 
 ### Multiplayer status
 
 This is a **solo-focused** build. Multiplayer player targeting and the Host/Co-Host/Admin/Mod/VIP/Guest rank system have been removed for now. No multiplayer role/status labels appear in the menu, including in single-player matches.
 
-Weapon/perk/map-entity availability varies by map. **Infinite Reserve** replenishes reserve ammunition and **Infinite Clip** refills the magazine. Impact damage and custom FX run on the trigger's rising edge, with a 220 ms FX rate limit. Shoot-to-TP uses a ray trace, landing offset, and 650 ms cooldown; it is still possible for an unusual surface or missing collision geometry to yield an unsafe landing, so save a position first. NoClip uses position updates and has a single guarded worker; its collision behavior depends on the browser port. The room bookmarks are saved **for the current session** and are not pre-filled with unverified coordinates. Defcon controls and map teleports are guarded by map/entity checks.
+Weapon/perk/map-entity availability varies by map. **Infinite Reserve** replenishes reserve ammunition and **Infinite Clip** refills the magazine. Impact effects are rate-limited. Shoot-to-TP uses a ray trace, landing offset, and cooldown; save your position before experimenting. NoClip is off initially: turn it on inside the Player menu to request the selected native bind. Turning it off requests an unbind. The GSC uses `activeAction` for these requests; depending on the browser port, they may only apply at the next map load, and immediate execution has not been verified. Room bookmarks last **only for the current session**. DEFCON, power-up and map teleports have map/entity guards.
 
-**Stability:** This version uses bounded loops for bulk zombie/door operations, a capped zombie queue, fixed HUD allocations, cooldowns, a recoverable HUD-state watchdog, and a separate movement/view lock. The GSC language cannot guarantee recovery from a JavaScript/WebAssembly engine out-of-memory failure or a native game VM crash; there is no universal exception handler for those failures.
+**Stability:** Bounded zombie/door operations, capped spawn queues, fixed HUD allocations, rate limits, and a HUD-state watchdog are included. The old 16 ms camera/origin forcing loops are removed. The game freezes and unfreezes controls only during menu transitions. Status polling runs once per second and the centered welcome message uses the browser overlay, not the in-game notification corner. GSC cannot recover from a JavaScript/WebAssembly out-of-memory failure or native VM crash.
 
-**Aimbot:** In the Aimbot page, turn on Classic for view-angle aiming while you hold ADS. Unfair enables Classic automatically and additionally fires at the selected zombie when you press Fire. The activation control can change ADS-only to always on. Both modes pause while the menu is open and ignore empty zombie waves. Unfair mode depends on the browser port supporting `MagicBullet` for the equipped weapon, so test it on each map.
+**Change Map:** Press Shift+M, choose the destination in the browser launcher, then Change Map. This saves the mod files to that map's local storage namespace before leaving the current game. After navigation, paste the loader again on the new page before Play. Changing maps ends the current round. The in-game Change Map option opens a short instruction page, since GSC cannot navigate a browser tab itself.
 
-**Zombie Counter:** Toggle it in the Zombies page. A small red `ZOMBIES` count appears in the game HUD. It refreshes twice per second and can be hidden without closing the main menu.
+**Devices / Mouse4:** Chrome or Edge on a desktop with OPFS is the intended target. Mobile, consoles, controller-only systems, and browsers without the underlying game features are not guaranteed to run. Physical Mouse4 is mapped by the browser game itself; the loader does not bind it. Enable NoClip inside the Player menu to request the native bind. If your browser consumes Mouse4 for navigation, choose Mouse5 or F6 inside the GSC menu, then restart the map if necessary for the DVAR to apply.
+
+**Aimbot:** Classic and Unfair are independent toggles. Classic rotates the camera toward the nearest live zombie while ADS is held, or continuously if you enable Classic Aim: Always. Unfair does not change camera angles or require ADS: on each fresh Fire press it sends a scripted shot toward the nearest live zombie. Both modes pause while the menu is open and ignore empty zombie waves. Unfair depends on the browser port supporting `MagicBullet` for the equipped weapon, so test it on each map.
+
+**Zombie Counter:** Toggle it in Zombie Controls. A compact colored `ZOMBIES` count appears in the top-left beneath the status readout. It refreshes twice per second and releases its HUD element when hidden.
 
 ## 3. Install your own GSC
 
@@ -74,7 +79,7 @@ You can run a second custom GSC script alongside the built-in SHADOW menu. This 
 
 1. Open the `examples/shadow_custom_menu_example.gsc` file from this package.
 2. Save a copy as `my_menu.gsc`. Use a plain-text editor (VS Code or Notepad++) and **UTF-8** encoding.
-3. On the game setup screen, paste `Shadow_GSC_Loader.js` into DevTools.
+3. On the game setup screen, paste `Shadow_Console_v0.8.8.js` into DevTools.
 4. In the SHADOW panel, click **Import custom GSC** and select `my_menu.gsc`.
 5. Wait until the panel confirms that the custom script was added.
 6. Click **PLAY** to start a **new game session**. Existing in-game sessions do not hot-reload scripts.
@@ -118,23 +123,23 @@ This is **edge detection**: keeping the buttons held doesn't keep reopening the 
 
 ### Step C: Draw the HUD
 
-Use `newClientHudElem(self)`. Set positions directly:
+Use direct HUD fields with a font scale of at least 1.0. Scales below 1.0 render at the browser game's enormous fallback size:
 
 ```gsc
 hud = newClientHudElem(self);
-hud.horzAlign = "left";
+hud.horzAlign = "center";
 hud.vertAlign = "top";
 hud.alignX = "left";
 hud.alignY = "top";
-hud.x = 345;
-hud.y = 163;
+hud.x = -110;
+hud.y = 117;
 hud.font = "default";
-hud.fontScale = 1;
+hud.fontScale = 1.08;
 hud.color = (1, 0.2, 0.3);
 hud setText("My First Option");
 ```
 
-**Important:** Avoid `#include maps\_hud_util` and `setPoint()` for this browser menu. The previous SHADOW HUD repeatedly entered that utility's `updateChildren` function and tripped the script watchdog. Positioning directly avoids that particular crash path.
+The included menu uses `newClientHudElem` directly and does not require `maps\_hud_util`. Do not lower its font scale below 1.0 when adding options.
 
 Colors use normalized RGB values from 0 to 1. For example:
 
@@ -142,7 +147,7 @@ Colors use normalized RGB values from 0 to 1. For example:
 - White: `(1, 1, 1)`
 - Dark gray: `(0.1, 0.1, 0.1)`
 
-A plain rectangular background uses `hud setShader("white", width, height)` with `hud.color` set to the desired shade.
+The included example deliberately has no background shader.
 
 ### Step D: Add or change an action
 
@@ -166,7 +171,7 @@ self maps\_zombiemode_score::add_to_player_score(1000);
 
 You can add a new label to the `custom_rows` array in `custom_show()`, increase the cursor's maximum in `custom_input()`, and add its corresponding case in `custom_select()`.
 
-For example, to create a fourth option, add another `self.custom_rows[3]`, change `self.custom_cursor > 2` to `> 3`, and change the row loops from 3 to 4. Increase the background height and adjust the footer down so the new row fits.
+For example, to create a fourth option, add another `self.custom_rows[3]`, change `self.custom_cursor > 2` to `> 3`, and change the row loops from 3 to 4. Move the footer down so the new row fits.
 
 ### Step E: Close the HUD
 
@@ -238,7 +243,7 @@ Click × or **Hide panel**. You can also run `Shadow.close()`. The panel should 
 
 **I can see the dark in-game panel but no text**
 
-Check `Shadow.diagnostics()` for script errors. Make sure you loaded version 0.6.1 and started a fresh game session.
+Check `Shadow.diagnostics()` for script errors. Make sure you loaded version 0.8.8 and started a fresh game session.
 
 **An option does nothing**
 
