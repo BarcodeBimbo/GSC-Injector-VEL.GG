@@ -2,7 +2,7 @@
 
 Shadow Garden GSC is a standalone console loader and in-game menu for the browser version at [vel.gg/bsz](https://vel.gg/bsz). It does not need Tampermonkey, a proxy, or a replacement FastFile.
 
-Version 0.6.1. The loader passes static checks. Test the menu features in the game before relying on them.
+Version 1.0.0. The loader passes static checks. Test the menu features in the game before relying on them.
 
 ## 1. Install SHADOW
 
