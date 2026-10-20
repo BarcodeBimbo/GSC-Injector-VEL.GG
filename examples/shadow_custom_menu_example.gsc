@@ -1,8 +1,8 @@
-/*
- * SHADOW custom GSC menu example
- * Import as a .gsc through the SHADOW injector.
- * ADS + USE opens this menu; FIRE moves; USE selects; MELEE closes.
- */
+// Example custom menu for Shadow Garden
+// Load this file with "Load Custom Script" before starting a new solo game.
+// Importing it enables Custom GSC and disables Built-in Menu by default.
+// The launcher can turn either script on or off independently.
+// ADS + USE opens it; FIRE moves; USE selects; MELEE closes.
 #include common_scripts\utility;
 #include maps\_utility;
 
@@ -48,7 +48,7 @@ custom_input()
             else if (attack && !old_attack)
             {
                 self.custom_cursor++;
-                if (self.custom_cursor > 2)
+                if (self.custom_cursor >= self.custom_rows.size)
                     self.custom_cursor = 0;
                 self custom_draw_cursor();
             }
@@ -69,29 +69,29 @@ custom_show()
     self.custom_open = true;
     self.custom_cursor = 0;
     self.custom_bg = newClientHudElem(self);
-    self.custom_bg.horzAlign = "left";
+    self.custom_bg.horzAlign = "center";
     self.custom_bg.vertAlign = "top";
-    self.custom_bg.alignX = "left";
+    self.custom_bg.alignX = "center";
     self.custom_bg.alignY = "top";
-    self.custom_bg.x = 330;
+    self.custom_bg.x = 0;
     self.custom_bg.y = 105;
     self.custom_bg.color = (0.035, 0.035, 0.045);
     self.custom_bg.alpha = 0.9;
     self.custom_bg.sort = 3;
-    self.custom_bg setShader("white", 250, 177);
+    self.custom_bg setShader("white", 250, 204);
 
-    self.custom_title = self custom_text("CUSTOM MENU", 345, 121, 1.3);
-    self.custom_rows[0] = self custom_text("Heal Player", 345, 163, 0.98);
-    self.custom_rows[1] = self custom_text("Add 1,000 Points", 345, 193, 0.98);
-    self.custom_rows[2] = self custom_text("Close", 345, 223, 0.98);
-    self.custom_footer = self custom_text("FIRE NEXT  USE SELECT  MELEE CLOSE", 345, 259, 0.70);
+    self.custom_title = self custom_text("CUSTOM GSC MENU", -108, 120, 1.3);
+    self.custom_rows[0] = self custom_text("Heal Player", -108, 159, 1.08);
+    self.custom_rows[1] = self custom_text("Add 1,000 Points", -108, 188, 1.08);
+    self.custom_rows[2] = self custom_text("Close", -108, 217, 1.08);
+    self.custom_footer = self custom_text("FIRE NEXT  |  USE SELECT\nMELEE CLOSE", -108, 255, 1.0);
     self custom_draw_cursor();
 }
 
 custom_text(value, x, y, scale)
 {
     hud = newClientHudElem(self);
-    hud.horzAlign = "left";
+    hud.horzAlign = "center";
     hud.vertAlign = "top";
     hud.alignX = "left";
     hud.alignY = "top";
@@ -111,7 +111,7 @@ custom_draw_cursor()
 {
     if (!self.custom_open)
         return;
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < self.custom_rows.size; i++)
     {
         if (i == self.custom_cursor)
             self.custom_rows[i].color = (1, 0.18, 0.29);
@@ -145,7 +145,7 @@ custom_close()
         return;
     self.custom_open = false;
 
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < self.custom_rows.size; i++)
     {
         if (isDefined(self.custom_rows[i]))
             self.custom_rows[i] destroy();

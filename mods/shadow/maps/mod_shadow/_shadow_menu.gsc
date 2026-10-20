@@ -1,4 +1,4 @@
-/* SHADOW GARDEN GSC - BO1 Zombies v1.0.2 */
+/* SHADOW GARDEN GSC - BO1 Zombies v1.3.13 */
 
 #include common_scripts\utility;
 #include maps\_utility;
@@ -11,6 +11,8 @@ shadow_player_init()
         return;
 
     self.shadow_running = true;
+    self.shadow_input_last_tick = getTime();
+    self.shadow_menu_opened_at = -10000;
     self.shadow_open = false;
     self.shadow_closing = false;
     self.shadow_was_ignored = false;
@@ -22,10 +24,16 @@ shadow_player_init()
     self.shadow_rows = [];
     self.shadow_items = [];
     self.shadow_item_values = [];
+    self.shadow_navigation_pages = [];
+    self.shadow_navigation_cursors = [];
+    self.shadow_navigation_depth = 0;
 
     self.shadow_god = false;
     self.shadow_user_notarget = false;
     self.shadow_spawn_origin = undefined;
+    self.shadow_lock_origin = undefined;
+    self.shadow_lock_angles = undefined;
+    self.shadow_controls_frozen_by_menu = false;
     self.shadow_room_slots = [];
     self.shadow_map_spots = [];
     self.shadow_shoot_tp = false;
@@ -35,32 +43,58 @@ shadow_player_init()
     self.shadow_last_fx = -10000;
     self.shadow_nuke_rounds = false;
     self.shadow_last_nuke_shot = -10000;
-    self.shadow_speed = false;
+    self.shadow_speed_level = 0;
+    if (!isDefined(level.shadow_jump_default))
+    {
+        level.shadow_jump_default = getDvarInt("jump_height");
+        if (level.shadow_jump_default <= 0)
+            level.shadow_jump_default = 39;
+    }
+    if (!isDefined(level.shadow_gravity_default))
+    {
+        level.shadow_gravity_default = getDvarInt("g_gravity");
+        if (level.shadow_gravity_default <= 0)
+            level.shadow_gravity_default = 800;
+    }
+    if (!isDefined(level.shadow_super_jump))
+        level.shadow_super_jump = false;
+    if (!isDefined(level.shadow_low_gravity))
+        level.shadow_low_gravity = false;
     self.shadow_auto_refill = false;
     self.shadow_infinite_clip = false;
     self.shadow_ammo_mode = 0;
     self.shadow_one_hit = false;
     self.shadow_zombie_counter = false;
     self.shadow_count_hud = undefined;
+    self.shadow_notice_bg = undefined;
+    self.shadow_notice_text = undefined;
+    self.shadow_notice_expires = 0;
     self.shadow_saved_origin = undefined;
+    self.shadow_last_hand_weapon = undefined;
     self.shadow_classic_aimbot = false;
     self.shadow_unfair_aimbot = false;
+    self.shadow_aim_target = undefined;
+    self.shadow_aim_next_scan = 0;
+    self.shadow_unfair_last_shot = -10000;
     self.shadow_aim_always = false;
     self.shadow_aim_bone = "j_head";
     self.shadow_key_mode = 0;
     self.shadow_noclip_bind = 1;
     self.shadow_noclip_active = false;
+    self.shadow_noclip_bound_key = "";
+    self.shadow_noclip_dirty = false;
+    self.shadow_noclip_toggle_pending = false;
     self.shadow_key_repeat = 215;
     self.shadow_invert_scroll = false;
     self.shadow_swap_horizontal = false;
-    self.shadow_color_r = 0.87;
-    self.shadow_color_g = 0.19;
-    self.shadow_color_b = 0.36;
+    self.shadow_color_r = 0.90;
+    self.shadow_color_g = 0.035;
+    self.shadow_color_b = 0.022;
     self.shadow_last_powerup_drop = -5000;
     self.shadow_palette = 0;
     self.shadow_low_effects = false;
     self.shadow_selection_visible = true;
-    self.shadow_scrollbar_visible = true;
+    self.shadow_scrollbar_visible = false;
     self.shadow_busy_defcon = false;
     self.shadow_busy_doors = false;
     self.shadow_busy_clear = false;
@@ -82,22 +116,40 @@ shadow_player_init()
     self thread shadow_safety_watchdog();
 }
 
-// Native crashes cannot be recovered from GSC.
 shadow_safety_watchdog()
 {
     self endon("disconnect");
     for (;;)
     {
         if (self.shadow_open && !self.shadow_closing &&
+            getTime() - self.shadow_menu_opened_at > 350 &&
             (!isDefined(self.shadow_bg) || !isDefined(self.shadow_title) ||
             !isDefined(self.shadow_section) ||
             !isDefined(self.shadow_selection) ||
-            self.shadow_rows.size != self.shadow_visible_rows))
+            self.shadow_rows.size != self.shadow_visible_rows ||
+            getTime() - self.shadow_input_last_tick > 2000))
         {
             self shadow_close();
-            self iPrintLn("^1SHADOW ^7HUD recovered from an incomplete state");
+            self shadow_notice("^1SHADOW ^7Menu reset after an error");
         }
-        wait 1;
+        if (isDefined(self.shadow_notice_bg) &&
+            isDefined(self.shadow_notice_text) &&
+            self.shadow_notice_expires != 0)
+        {
+            remaining = self.shadow_notice_expires - getTime();
+            if (remaining <= 0)
+            {
+                self.shadow_notice_bg.alpha = 0;
+                self.shadow_notice_text.alpha = 0;
+                self.shadow_notice_expires = 0;
+            }
+            else if (remaining < 800)
+            {
+                self.shadow_notice_bg.alpha = remaining / 800.0;
+                self.shadow_notice_text.alpha = remaining / 800.0;
+            }
+        }
+        wait 0.25;
     }
 }
 
@@ -109,30 +161,49 @@ shadow_input_loop()
     old_melee = false;
     old_attack = false;
     old_use = false;
+    old_jump = false;
     old_right = false;
     old_left = false;
     next_nav = 0;
 
     for (;;)
     {
+        self.shadow_input_last_tick = getTime();
         ads = self adsButtonPressed();
         melee = self meleeButtonPressed();
         attack = self attackButtonPressed();
         use = self useButtonPressed();
+        jump = self jumpButtonPressed();
 
         if (!self.shadow_open)
         {
             if (ads && melee && (!old_ads || !old_melee))
+            {
                 self shadow_show();
+                next_nav = getTime() + 180;
+            }
+            old_right = false;
+            old_left = false;
         }
         else
         {
+            if (isDefined(self.shadow_lock_origin))
+            {
+                self setVelocity((0, 0, 0));
+                if (distance(self.origin, self.shadow_lock_origin) > 2)
+                    self setOrigin(self.shadow_lock_origin);
+            }
+            if (isDefined(self.shadow_lock_angles))
+                self setPlayerAngles(self.shadow_lock_angles);
 
             movement = self getNormalizedMovement();
+            if (!isDefined(movement))
+                movement = (0, 0, 0);
             w = movement[0] > 0.50;
             s = movement[0] < -0.50;
             d = movement[1] > 0.50;
             a = movement[1] < -0.50;
+
             select_key = d && !old_right;
             back_key = a && !old_left;
             up_key = w;
@@ -148,21 +219,40 @@ shadow_input_loop()
                 down_key = w;
             }
 
-            if (melee && !old_melee)
+            if (ads && melee && (!old_ads || !old_melee))
+            {
                 self shadow_close();
+                next_nav = getTime() + 200;
+            }
+            else if (melee && !old_melee)
+            {
+                if (self.shadow_page == 0)
+                    self shadow_close();
+                else
+                    self shadow_back();
+                next_nav = getTime() + 140;
+            }
             else if ((self.shadow_key_mode == 0 && select_key) ||
-                (use && !old_use))
+                (use && !old_use) || (jump && !old_jump))
+            {
                 self shadow_activate();
+                next_nav = getTime() + 130;
+            }
             else if (self.shadow_key_mode == 0 && back_key)
+            {
                 self shadow_back();
+                next_nav = getTime() + 130;
+            }
             else if (getTime() >= next_nav)
             {
-                if ((self.shadow_key_mode == 0 && down_key) || (attack && !old_attack))
+                if ((self.shadow_key_mode == 0 && down_key) ||
+                    (attack && !old_attack))
                 {
                     self shadow_move(1);
                     next_nav = getTime() + self.shadow_key_repeat;
                 }
-                else if ((self.shadow_key_mode == 0 && up_key) || (ads && !old_ads))
+                else if ((self.shadow_key_mode == 0 && up_key) ||
+                    (ads && !old_ads))
                 {
                     self shadow_move(-1);
                     next_nav = getTime() + self.shadow_key_repeat;
@@ -176,7 +266,11 @@ shadow_input_loop()
         old_melee = melee;
         old_attack = attack;
         old_use = use;
-        wait 0.05;
+        old_jump = jump;
+        if (self.shadow_open)
+            wait 0.04;
+        else
+            wait 0.07;
     }
 }
 
@@ -186,13 +280,17 @@ shadow_show()
         return;
 
     self.shadow_open = true;
-    self.shadow_page = 0;
-    self.shadow_cursor = 0;
-    self.shadow_window = 0;
+    self.shadow_menu_opened_at = getTime();
     if (!isDefined(self.shadow_spawn_origin))
         self.shadow_spawn_origin = self.origin;
-    self setVelocity((0, 0, 0));
+    self.shadow_lock_origin = self.origin;
+    self.shadow_lock_angles = self getPlayerAngles();
+    self.shadow_controls_frozen_by_menu = true;
     self freezeControls(true);
+    self thread shadow_hold_view();
+    self.shadow_last_hand_weapon = self getCurrentWeapon();
+    self setVelocity((0, 0, 0));
+    self setMoveSpeedScale(0);
     self.shadow_was_ignored = isDefined(self.ignoreme) && self.ignoreme;
     self.shadow_menu_invuln_applied = false;
     if (self.shadow_menu_auto_protect)
@@ -203,41 +301,89 @@ shadow_show()
     }
     self disableWeapons();
     self shadow_define_page();
+    if (self.shadow_cursor >= self.shadow_items.size)
+        self.shadow_cursor = self.shadow_items.size - 1;
+    if (self.shadow_cursor < 0)
+        self.shadow_cursor = 0;
+    if (self.shadow_window > self.shadow_cursor)
+        self.shadow_window = self.shadow_cursor;
+    if (self.shadow_window < 0)
+        self.shadow_window = 0;
+    if (self.shadow_cursor >= self.shadow_window + self.shadow_visible_rows)
+        self.shadow_window = self.shadow_cursor - self.shadow_visible_rows + 1;
 
-    self.shadow_bg = self shadow_center_bar(0, 38, 372, 362,
+    self.shadow_bg = self shadow_center_bar(0, 49, 220, 240,
         (0.018, 0.020, 0.031), 0.94, 3);
-    self.shadow_top = self shadow_center_bar(0, 38, 366, 69,
-        (0.105, 0.027, 0.060), 0.98, 4);
-    self.shadow_edge = self shadow_center_bar(-183, 38, 5, 362,
-        self shadow_accent(), 1, 5);
-    self.shadow_rule = self shadow_center_bar(0, 106, 346, 2,
+    self.shadow_top = self shadow_center_bar(0, 49, 216, 42,
+        (0.051, 0.018, 0.016), 0.98, 4);
+    self.shadow_rule = self shadow_center_bar(0, 91, 198, 2,
         self shadow_accent(), 0.90, 5);
-    self.shadow_selection = self shadow_center_bar(0, 143, 338, 24,
-        (0.33, 0.035, 0.095), 0.94, 5);
-    self.shadow_scroll_thumb = self shadow_center_bar(174, 146, 3, 19,
-        self shadow_accent(), 0.95, 6);
+    self.shadow_selection = self shadow_center_bar(0, 111, 194, 18,
+        (0.32, 0.025, 0.020), 0.94, 5);
 
-    self.shadow_title = self shadow_center_text("SHADOW GARDEN", -166, 52, 1.68,
+    self.shadow_title = self shadow_center_text("SHADOWGARDEN GSC MENU", -5, 52, 1.20,
         (1, 1, 1), 7);
-    self.shadow_subtitle = self shadow_center_text("GSC MENU / BLACK OPS ZOMBIES", -165, 82,
+    self.shadow_title.alignX = "center";
+    self.shadow_title.glowColor = (1, 0.02, 0.015);
+    self.shadow_title.glowAlpha = 0.55;
+    self.shadow_subtitle = self shadow_center_text("BY ^1JOSHUA ^7| DISCORD.GG/^1SHADOWGARDEN", -15, 71,
+        1.05, (0.88, 0.82, 0.82), 7);
+    self.shadow_subtitle.alignX = "center";
+    self.shadow_subtitle.glowColor = (1, 0.025, 0.018);
+    self.shadow_subtitle.glowAlpha = 0.20;
+    self.shadow_section = self shadow_center_text("MAIN MENU", -96, 98,
         1.05, self shadow_accent(), 7);
-    self.shadow_section = self shadow_center_text("MAIN MENU", -165, 117,
-        1.08, self shadow_accent(), 7);
-    self.shadow_page_count = self shadow_center_text("1 / 1", 127, 117,
+    self.shadow_page_count = self shadow_center_text("1 / 1", 72, 98,
         1.05, (0.85, 0.85, 0.85), 7);
 
     for (i = 0; i < self.shadow_visible_rows; i++)
     {
-        self.shadow_rows[i] = self shadow_center_text(" ", -158, 146 + (i * 24),
-            1.08, (1, 1, 1), 7);
+        self.shadow_rows[i] = self shadow_center_text(" ", -86, 113 + (i * 18),
+            1.03, (1, 1, 1), 7);
     }
 
-    self.shadow_footer = self shadow_center_text("W/S MOVE   D SELECT   A BACK", -164, 346,
-        1.05, (0.85, 0.85, 0.85), 7);
-    self.shadow_exit = self shadow_center_text("MELEE CLOSES MENU", -164, 370,
-        1.05, (0.85, 0.85, 0.85), 7);
-
+    self.shadow_footer_rule = self shadow_center_bar(0, 244, 220, 2,
+        self shadow_accent(), 0.85, 5);
+    self.shadow_footer_strip = self shadow_center_bar(0, 247, 220, 41,
+        (0.11, 0.018, 0.016), 0.90, 4);
+    self.shadow_footer = self shadow_center_text("^7             ^1[W/S] ^7NAV ^1[D/USE] ^7SELECT ^1[A] ^7BACK\n^7           ^1[MELEE] ^7BACK/CLOSE ^1[ADS+MELEE] ^7EXIT", -24, 253,
+        1.05, (1, 0.92, 0.90), 7);
+    self.shadow_footer.alignX = "center";
+    self.shadow_footer.fontScale = 0.98;
     self shadow_paint_page();
+    self.shadow_footer.alpha = 0.92;
+    self thread shadow_title_cycle();
+}
+
+shadow_hold_view()
+{
+    self endon("disconnect");
+    self endon("shadow_menu_closed");
+    for (;;)
+    {
+        if (!self.shadow_open || !isDefined(self.shadow_lock_angles))
+            return;
+        if (distance(self getPlayerAngles(), self.shadow_lock_angles) > 0.01)
+            self setPlayerAngles(self.shadow_lock_angles);
+        wait 0.02;
+    }
+}
+
+shadow_title_cycle()
+{
+    self endon("disconnect");
+    self endon("shadow_menu_closed");
+    for (;;)
+    {
+        if (!self.shadow_open || !isDefined(self.shadow_title))
+            return;
+        self.shadow_title.color = (1, 0.02, 0.015);
+        self.shadow_title.glowAlpha = 0.82;
+        wait 2.3;
+        self.shadow_title.color = (1, 1, 1);
+        self.shadow_title.glowAlpha = 0.55;
+        wait 2.3;
+    }
 }
 
 shadow_close()
@@ -248,17 +394,20 @@ shadow_close()
     self.shadow_open = false;
     self.shadow_closing = true;
     self notify("shadow_menu_closed");
-    self freezeControls(false);
+    self.shadow_lock_origin = undefined;
+    self.shadow_lock_angles = undefined;
     self setVelocity((0, 0, 0));
+    if (self.shadow_controls_frozen_by_menu)
+        self freezeControls(false);
+    self.shadow_controls_frozen_by_menu = false;
     self enableWeapons();
-    if (self.shadow_speed)
-        self setMoveSpeedScale(1.5);
-    else
-        self setMoveSpeedScale(1);
+    self setMoveSpeedScale(self shadow_speed_scale());
     self.ignoreme = self.shadow_user_notarget || self.shadow_was_ignored;
     if (!self.shadow_god && self.shadow_menu_invuln_applied)
         self disableInvulnerability();
     self.shadow_menu_invuln_applied = false;
+    if (self.shadow_noclip_dirty || self.shadow_noclip_toggle_pending)
+        self thread shadow_apply_noclip();
 
     for (i = 0; i < self.shadow_visible_rows; i++)
     {
@@ -266,10 +415,12 @@ shadow_close()
             self.shadow_rows[i] destroy();
     }
 
-    if (isDefined(self.shadow_exit))
-        self.shadow_exit destroy();
     if (isDefined(self.shadow_footer))
         self.shadow_footer destroy();
+    if (isDefined(self.shadow_footer_rule))
+        self.shadow_footer_rule destroy();
+    if (isDefined(self.shadow_footer_strip))
+        self.shadow_footer_strip destroy();
     if (isDefined(self.shadow_scroll_thumb))
         self.shadow_scroll_thumb destroy();
     if (isDefined(self.shadow_selection))
@@ -290,15 +441,15 @@ shadow_close()
         self.shadow_top destroy();
     if (isDefined(self.shadow_bg))
         self.shadow_bg destroy();
+    self.shadow_bg_height = undefined;
 
     self.shadow_rows = [];
     self.shadow_items = [];
     self.shadow_item_values = [];
-    self.shadow_cursor = 0;
-    self.shadow_window = 0;
     self.shadow_closing = false;
     self.shadow_footer = undefined;
-    self.shadow_exit = undefined;
+    self.shadow_footer_rule = undefined;
+    self.shadow_footer_strip = undefined;
     self.shadow_scroll_thumb = undefined;
     self.shadow_selection = undefined;
     self.shadow_section = undefined;
@@ -309,6 +460,7 @@ shadow_close()
     self.shadow_edge = undefined;
     self.shadow_top = undefined;
     self.shadow_bg = undefined;
+
 }
 
 shadow_move(direction)
@@ -336,8 +488,14 @@ shadow_move(direction)
 
 shadow_change_page(page)
 {
-    if (page == 18)
-        self.shadow_five_parent = self.shadow_page;
+    if (!isDefined(page) || page < 0 || page > 28)
+        return;
+    if (self.shadow_navigation_depth < 10)
+    {
+        self.shadow_navigation_pages[self.shadow_navigation_depth] = self.shadow_page;
+        self.shadow_navigation_cursors[self.shadow_navigation_depth] = self.shadow_cursor;
+        self.shadow_navigation_depth++;
+    }
     self.shadow_page = page;
     self.shadow_cursor = 0;
     self.shadow_window = 0;
@@ -347,33 +505,24 @@ shadow_change_page(page)
 
 shadow_back()
 {
-    if (self.shadow_page == 0)
+    if (self.shadow_navigation_depth <= 0)
+    {
         self shadow_close();
-    else
-        self shadow_change_page(self shadow_parent_page(self.shadow_page));
-}
-
-shadow_parent_page(page)
-{
-    if (page == 18 && isDefined(self.shadow_five_parent))
-        return self.shadow_five_parent;
-    if (page == 2 || page == 3 || page == 9 || page == 22)
-        return 13;
-    if (page == 4 || page == 5 || page == 27)
-        return 14;
-    if (page == 24)
-        return 4;
-    if (page == 6 || page == 10 || page == 25)
-        return 15;
-    if (page == 17 || page == 23)
-        return 6;
-    if (page == 8 || page == 12)
-        return 16;
-    if (page == 26)
-        return 19;
-    if (page == 11 || page == 19 || page == 21)
-        return 20;
-    return 0;
+        return;
+    }
+    self.shadow_navigation_depth--;
+    self.shadow_page = self.shadow_navigation_pages[self.shadow_navigation_depth];
+    selected = self.shadow_navigation_cursors[self.shadow_navigation_depth];
+    self shadow_define_page();
+    if (selected >= self.shadow_items.size)
+        selected = self.shadow_items.size - 1;
+    if (selected < 0)
+        selected = 0;
+    self.shadow_cursor = selected;
+    self.shadow_window = 0;
+    if (selected >= self.shadow_visible_rows)
+        self.shadow_window = selected - self.shadow_visible_rows + 1;
+    self shadow_paint_page();
 }
 
 shadow_define_page()
@@ -383,41 +532,25 @@ shadow_define_page()
 
     if (self.shadow_page == 0)
     {
-        self shadow_add_option("Player / Movement", 1);
-        self shadow_add_option("Arsenal / Upgrades", 13);
-        self shadow_add_option("Zombies / Points", 14);
-        self shadow_add_option("Teleport / World", 15);
-        self shadow_add_option("Combat / Aimbot", 7);
-        self shadow_add_option("Controls / HUD", 20);
-        self shadow_add_option("Stats / Achievements", 16);
-        self shadow_add_option("Close Shadow", -1);
+        self shadow_add_option("Player Mods", "page_1");
+        self shadow_add_option("Weapons", "page_13");
+        self shadow_add_option("Lobby Mods", "page_15");
+        self shadow_add_option("Aimbot & Combat", "page_7");
+        self shadow_add_option("Settings", "page_20");
+        self shadow_add_option("Extras", "page_16");
     }
     else if (self.shadow_page == 1)
     {
-        if (self.shadow_god)
-            self.shadow_items[0] = "God Mode: ON";
-        else
-            self.shadow_items[0] = "God Mode: OFF";
-
-        if (self.shadow_user_notarget)
-            self.shadow_items[1] = "No Target: ON";
-        else
-            self.shadow_items[1] = "No Target: OFF";
-
+        self.shadow_items[0] = "God Mode: " + self shadow_on_off(self.shadow_god);
+        self.shadow_items[1] = "No Target: " + self shadow_on_off(self.shadow_user_notarget);
         self.shadow_items[2] = "NoClip: " + self shadow_on_off(self.shadow_noclip_active);
-        self.shadow_items[3] = "NoClip Bind: " + self shadow_noclip_bind_name();
-        if (self.shadow_speed)
-            self.shadow_items[4] = "Speed Boost: ON";
-        else
-            self.shadow_items[4] = "Speed Boost: OFF";
-        self.shadow_items[5] = "Restore Health";
-        self.shadow_items[6] = "Save Spawn / Return in TP Menu";
-        self.shadow_items[7] = "Reset Player Options";
-        self.shadow_items[8] = "< Back";
+        self.shadow_items[3] = "Player Speed: " + self shadow_speed_name();
+        self.shadow_items[4] = "Heal Player";
+        self.shadow_items[5] = "Reset Player Mods";
+        self.shadow_items[6] = "< Back";
     }
     else if (self.shadow_page == 2)
     {
-        self shadow_add_option("Death Machine", "minigun_zm");
         self shadow_add_weapon("ray_gun_zm", "Ray Gun");
         self shadow_add_weapon("ak74u_zm", "AK74u");
         self shadow_add_weapon("mp40_zm", "MP40");
@@ -431,91 +564,98 @@ shadow_define_page()
         self shadow_add_weapon("scavenger_zm", "Scavenger");
         self shadow_add_weapon("microwavegun_zm", "Wave Gun");
         self shadow_add_weapon("31-79_jgb215_zm", "31-79 JGb215");
+        self shadow_add_weapon("python_zm", "Python");
+        self shadow_add_weapon("cz75_zm", "CZ75");
+        self shadow_add_weapon("cz75dw_zm", "CZ75 Dual Wield");
+        self shadow_add_weapon("mp5k_zm", "MP5K");
+        self shadow_add_weapon("mpl_zm", "MPL");
+        self shadow_add_weapon("pm63_zm", "PM63");
+        self shadow_add_weapon("spectre_zm", "Spectre");
+        self shadow_add_weapon("ithaca_zm", "Stakeout");
+        self shadow_add_weapon("spas_zm", "SPAS-12");
+        self shadow_add_weapon("rottweil72_zm", "Olympia");
+        self shadow_add_weapon("hs10_zm", "HS10");
+        self shadow_add_weapon("m14_zm", "M14");
+        self shadow_add_weapon("m16_zm", "M16");
+        self shadow_add_weapon("g11_lps_zm", "G11");
+        self shadow_add_weapon("famas_zm", "FAMAS");
+        self shadow_add_weapon("aug_acog_zm", "AUG");
+        self shadow_add_weapon("commando_zm", "Commando");
+        self shadow_add_weapon("fnfal_zm", "FN FAL");
+        self shadow_add_weapon("dragunov_zm", "Dragunov");
+        self shadow_add_weapon("l96a1_zm", "L96A1");
+        self shadow_add_weapon("m72_law_zm", "M72 LAW");
+        self shadow_add_weapon("china_lake_zm", "China Lake");
+        self shadow_add_weapon("crossbow_explosive_zm", "Explosive Crossbow");
+        self shadow_add_weapon("knife_ballistic_zm", "Ballistic Knife");
+        self shadow_add_weapon("knife_ballistic_bowie_zm", "Ballistic Knife (Bowie)");
+        self shadow_add_weapon("knife_ballistic_sickle_zm", "Ballistic Knife (Sickle)");
         if (self.shadow_items.size == 0)
             self shadow_add_option("No registered weapons", "unavailable");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 3)
     {
-        self.shadow_items[0] = "Refill Current Weapon";
-        if (self.shadow_auto_refill)
-            self.shadow_items[1] = "Infinite Reserve: ON";
-        else
-            self.shadow_items[1] = "Infinite Reserve: OFF";
-        if (self.shadow_infinite_clip)
-            self.shadow_items[2] = "Infinite Clip: ON";
-        else
-            self.shadow_items[2] = "Infinite Clip: OFF";
-        self.shadow_items[3] = "Rounds: " + self shadow_ammo_mode_name();
-        self.shadow_items[4] = "Drop Current Weapon";
-        self.shadow_items[5] = "< Back";
+        self.shadow_items[0] = "Pack-a-Punch Weapon";
+        self.shadow_items[1] = "Refill Current Ammo";
+        self.shadow_items[2] = "Refill All Ammo";
+        self.shadow_items[3] = "Unlimited Ammo: " + self shadow_on_off(self.shadow_auto_refill);
+        self.shadow_items[4] = "Infinite Clip: " + self shadow_on_off(self.shadow_infinite_clip);
+        self.shadow_items[5] = "Drop Weapon";
+        self.shadow_items[6] = "< Back";
     }
     else if (self.shadow_page == 4)
     {
-        self.shadow_items[0] = "Clear Spawned Zombies";
-        if (self.shadow_zombie_counter)
-            self.shadow_items[1] = "Zombie Counter: ON";
-        else
-            self.shadow_items[1] = "Zombie Counter: OFF";
-        if (self.shadow_one_hit)
-            self.shadow_items[2] = "One-Hit Zombies: ON";
-        else
-            self.shadow_items[2] = "One-Hit Zombies: OFF";
-        self.shadow_items[3] = "Count Alive Now";
-        self.shadow_items[4] = "Current Round";
-        self.shadow_items[5] = "Zombie Spawner";
-        self.shadow_items[6] = "< Back";
+        self.shadow_items[0] = "Clear Zombies";
+        self.shadow_items[1] = "Zombie Counter: " + self shadow_on_off(self.shadow_zombie_counter);
+        self.shadow_items[2] = "Show Alive Zombies";
+        self.shadow_items[3] = "Skip Round";
+        self.shadow_items[4] = "Zombie Spawner";
+        self.shadow_items[5] = "< Back";
     }
     else if (self.shadow_page == 5)
     {
-        self.shadow_items[0] = "Add 1,000";
-        self.shadow_items[1] = "Add 5,000";
-        self.shadow_items[2] = "Add 10,000";
-        self.shadow_items[3] = "Add 50,000";
-        self.shadow_items[4] = "Add 100,000";
-        self.shadow_items[5] = "< Back";
+        self.shadow_items[0] = "Add 1,337 Points";
+        self.shadow_items[1] = "Add 1,000 Points";
+        self.shadow_items[2] = "Add 5,000 Points";
+        self.shadow_items[3] = "Add 10,000 Points";
+        self.shadow_items[4] = "Add 50,000 Points";
+        self.shadow_items[5] = "Add 100,000 Points";
+        self.shadow_items[6] = "Reset Points";
+        self.shadow_items[7] = "< Back";
     }
     else if (self.shadow_page == 6)
     {
-        self.shadow_items[0] = "Room Bookmarks (A / B / C)";
-        self.shadow_items[1] = "Map Location Teleports";
-        self.shadow_items[2] = "Shoot to TP: " + self shadow_on_off(self.shadow_shoot_tp);
-        self.shadow_items[3] = "Save Current Location";
-        self.shadow_items[4] = "Return to Saved";
+        self.shadow_items[0] = "Saved Positions";
+        self.shadow_items[1] = "Map Teleports";
+        self.shadow_items[2] = "Shoot to Teleport: " + self shadow_on_off(self.shadow_shoot_tp);
+        self.shadow_items[3] = "Save Position";
+        self.shadow_items[4] = "Teleport to Saved";
         self.shadow_items[5] = "Teleport to Crosshair";
-        self.shadow_items[6] = "Clear Saved Location";
+        self.shadow_items[6] = "Set Spawn Return Point";
         self.shadow_items[7] = "< Back";
     }
     else if (self.shadow_page == 7)
     {
-        if (self.shadow_classic_aimbot)
-            self.shadow_items[0] = "Classic Aimbot: ON";
-        else
-            self.shadow_items[0] = "Classic Aimbot: OFF";
-
-        if (self.shadow_unfair_aimbot)
-            self.shadow_items[1] = "Unfair Aimbot: ON";
-        else
-            self.shadow_items[1] = "Unfair Aimbot: OFF";
-
+        self.shadow_items[0] = "Classic Aimbot: " + self shadow_on_off(self.shadow_classic_aimbot);
+        self.shadow_items[1] = "Unfair Aimbot: " + self shadow_on_off(self.shadow_unfair_aimbot);
         if (self.shadow_aim_always)
-            self.shadow_items[2] = "Classic Aim: Always";
+            self.shadow_items[2] = "Aim Activation: Always";
         else
-            self.shadow_items[2] = "Classic Aim: ADS";
-
+            self.shadow_items[2] = "Aim Activation: ADS";
         if (self.shadow_aim_bone == "j_head")
-            self.shadow_items[3] = "Target: Head";
+            self.shadow_items[3] = "Aim Target: Head";
         else
-            self.shadow_items[3] = "Target: Torso";
-
-        self.shadow_items[4] = "< Back";
+            self.shadow_items[3] = "Aim Target: Body";
+        self.shadow_items[4] = "One-Hit Kill: " + self shadow_on_off(self.shadow_one_hit);
+        self.shadow_items[5] = "< Back";
     }
     else if (self.shadow_page == 8)
     {
-        self.shadow_items[0] = "Current Map";
-        self.shadow_items[1] = "Current Weapon";
-        self.shadow_items[2] = "Player Position";
-        self.shadow_items[3] = "Current Round";
+        self.shadow_items[0] = "View Map Name";
+        self.shadow_items[1] = "View Current Weapon";
+        self.shadow_items[2] = "View Coordinates";
+        self.shadow_items[3] = "View Round";
         self.shadow_items[4] = "< Back";
     }
     else if (self.shadow_page == 9)
@@ -534,34 +674,36 @@ shadow_define_page()
     }
     else if (self.shadow_page == 10)
     {
-        if (self shadow_door_count() > 0)
-            self shadow_add_option("Unlock All Doors", "doors");
-        if (self shadow_power_available())
-            self shadow_add_option("Turn Power On", "power");
+        self shadow_add_option("Turn On Power", "power");
+        self shadow_add_option("Open All Doors & Debris", "doors");
+        self shadow_add_option("Open All Doors", "doors_only");
+        self shadow_add_option("Clear All Debris", "debris_only");
+        self shadow_add_option("Super Jump: " + self shadow_on_off(level.shadow_super_jump), "jump");
+        self shadow_add_option("Low Gravity: " + self shadow_on_off(level.shadow_low_gravity), "gravity");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 11)
     {
         if (self.shadow_key_mode == 0)
-            self.shadow_items[0] = "Navigation: WASD";
+            self.shadow_items[0] = "Control Layout: WASD";
         else
-            self.shadow_items[0] = "Navigation: Classic";
-        self.shadow_items[1] = "Scroll Repeat: " + self.shadow_key_repeat + "ms";
+            self.shadow_items[0] = "Control Layout: Classic";
+        self.shadow_items[1] = "Scroll Speed: " + self shadow_scroll_speed_name();
         if (self.shadow_invert_scroll)
             self.shadow_items[2] = "Scroll Direction: Inverted";
         else
             self.shadow_items[2] = "Scroll Direction: Normal";
         if (self.shadow_swap_horizontal)
-            self.shadow_items[3] = "Horizontal: A Select / D Back";
+            self.shadow_items[3] = "Select: A / Back: D";
         else
-            self.shadow_items[3] = "Horizontal: D Select / A Back";
+            self.shadow_items[3] = "Select: D / Back: A";
         self.shadow_items[4] = "NoClip Bind: " + self shadow_noclip_bind_name();
         self.shadow_items[5] = "Reset Controls";
         self.shadow_items[6] = "< Back";
     }
     else if (self.shadow_page == 12)
     {
-        self.shadow_items[0] = "SHADOW Session Challenges";
+        self.shadow_items[0] = "Challenge Progress";
         if (self.shadow_achievement_survivor)
             self.shadow_items[1] = "Survivor V  [UNLOCKED]";
         else
@@ -588,85 +730,83 @@ shadow_define_page()
     }
     else if (self.shadow_page == 13)
     {
-        self shadow_add_option("Give Weapons", 2);
-        self shadow_add_option("Ammo / Impact Rounds", 3);
-        self shadow_add_option("Custom Weapon FX", 22);
+        self shadow_add_option("Give Weapons", "page_2");
+        self shadow_add_option("Equipment", "page_28");
+        self shadow_add_option("Ammo & Upgrades", "page_3");
+        self shadow_add_option("Bullet FX & Rounds", "page_22");
         if (self shadow_perks_available())
-            self shadow_add_option("Give / Remove Perks", 9);
-        if (getDvar("mapname") == "zombie_pentagon")
-            self shadow_add_option("Five: Pack-a-Punch Access", 18);
+            self shadow_add_option("Perks", "page_9");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 14)
     {
-        self shadow_add_option("Zombie Controls", 4);
-        self shadow_add_option("Add Points", 5);
-        self shadow_add_option("Spawn Power-Ups", 27);
+        self shadow_add_option("Zombie Options", "page_4");
+        self shadow_add_option("Points", "page_5");
+        self shadow_add_option("Power-Ups", "page_27");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 15)
     {
-        self shadow_add_option("Saved / Room Teleports", 6);
-        if (self shadow_world_available())
-            self shadow_add_option("Doors / Power", 10);
+        self shadow_add_option("Zombies & Points", "page_14");
+        self shadow_add_option("World Mods", "page_10");
+        self shadow_add_option("Teleport", "page_6");
         if (getDvar("mapname") == "zombie_pentagon")
-            self shadow_add_option("Five: Rooms / DEFCON", 18);
-        self shadow_add_option("Change Map (Shift+M)", 25);
+            self shadow_add_option("Five Controls", "page_18");
+        self shadow_add_option("Change Map [Shift+M]", "map_shortcut");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 16)
     {
-        self shadow_add_option("Session Challenges", 12);
-        self shadow_add_option("Map / Player Information", 8);
+        self shadow_add_option("Local Challenges", "page_12");
+        self shadow_add_option("Game Info", "page_8");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 17)
     {
-        self.shadow_items[0] = "Save Room A Here";
-        self.shadow_items[1] = "Teleport to Room A";
-        self.shadow_items[2] = "Save Room B Here";
-        self.shadow_items[3] = "Teleport to Room B";
-        self.shadow_items[4] = "Save Room C Here";
-        self.shadow_items[5] = "Teleport to Room C";
+        self.shadow_items[0] = "Save Position A";
+        self.shadow_items[1] = "Teleport to Position A";
+        self.shadow_items[2] = "Save Position B";
+        self.shadow_items[3] = "Teleport to Position B";
+        self.shadow_items[4] = "Save Position C";
+        self.shadow_items[5] = "Teleport to Position C";
         self.shadow_items[6] = "Return to Spawn";
         self.shadow_items[7] = "< Back";
     }
     else if (self.shadow_page == 18)
     {
         self.shadow_items[0] = "Activate DEFCON 5 (Power First)";
-        self.shadow_items[1] = "Teleport: Top Floor";
-        self.shadow_items[2] = "Teleport: War Room";
-        self.shadow_items[3] = "Teleport: Labs";
-        self.shadow_items[4] = "Teleport: Pack-a-Punch Room";
-        self.shadow_items[5] = "DEFCON / Power Status";
+        self.shadow_items[1] = "Teleport to Top Floor";
+        self.shadow_items[2] = "Teleport to War Room";
+        self.shadow_items[3] = "Teleport to Labs";
+        self.shadow_items[4] = "Teleport to Pack-a-Punch";
+        self.shadow_items[5] = "Show DEFCON / Power Status";
         self.shadow_items[6] = "< Back";
     }
     else if (self.shadow_page == 19)
     {
         self.shadow_items[0] = "Selection Highlight: " + self shadow_on_off(self.shadow_selection_visible);
-        self.shadow_items[1] = "Side Scrollbar: " + self shadow_on_off(self.shadow_scrollbar_visible);
-        self.shadow_items[2] = "Custom Accent Colors";
-        self.shadow_items[3] = "< Back";
+        self.shadow_items[1] = "Menu Colors";
+        self.shadow_items[2] = "< Back";
     }
     else if (self.shadow_page == 20)
     {
-        self shadow_add_option("Menu Binds / NoClip Key", 11);
-        self shadow_add_option("Theme / HUD Effects", 19);
-        self shadow_add_option("Safety / Performance", 21);
+        self shadow_add_option("Controls & Keybinds", "page_11");
+        self shadow_add_option("Appearance", "page_19");
+        self shadow_add_option("Performance & Safety", "page_21");
         self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 21)
     {
-        self.shadow_items[0] = "Auto Protection: " + self shadow_on_off(self.shadow_menu_auto_protect);
-        self.shadow_items[1] = "Low Effects: " + self shadow_on_off(self.shadow_low_effects);
-        self.shadow_items[2] = "Emergency: Close Menu";
+        self.shadow_items[0] = "Menu Protection: " + self shadow_on_off(self.shadow_menu_auto_protect);
+        self.shadow_items[1] = "Reduced Effects: " + self shadow_on_off(self.shadow_low_effects);
+        self.shadow_items[2] = "Force Close Menu";
         self.shadow_items[3] = "< Back";
     }
     else if (self.shadow_page == 22)
     {
-        self.shadow_items[0] = "Impact FX: " + self shadow_on_off(self.shadow_fx_enabled);
-        self.shadow_items[1] = "Effect: " + self shadow_fx_name();
-        self.shadow_items[2] = "Ammo Damage Mode: " + self shadow_ammo_mode_name();
+        self.shadow_items[0] = "Bullet Impact FX: " + self shadow_on_off(self.shadow_fx_enabled);
+        self.shadow_items[1] = "Impact Effect: " + self shadow_fx_name();
+        self.shadow_items[2] = "Bullet Damage: " + self shadow_ammo_mode_name();
         self.shadow_items[3] = "Nuke Rounds: " + self shadow_on_off(self.shadow_nuke_rounds);
         self.shadow_items[4] = "< Back";
     }
@@ -677,19 +817,10 @@ shadow_define_page()
     }
     else if (self.shadow_page == 24)
     {
-        self.shadow_items[0] = "Queue 1 Map Zombie";
-        self.shadow_items[1] = "Queue 5 Map Zombies";
-        self.shadow_items[2] = "Queue 10 Map Zombies";
-        self.shadow_items[3] = "Queued This Round: " + self shadow_spawn_pending_text();
-        self.shadow_items[4] = "Clear All Spawned Zombies";
-        self.shadow_items[5] = "< Back";
-    }
-    else if (self.shadow_page == 25)
-    {
-        self.shadow_items[0] = "Open launcher: SHIFT + M";
-        self.shadow_items[1] = "Pick the new map in the panel";
-        self.shadow_items[2] = "Press Change Map";
-        self.shadow_items[3] = "Reload the loader on new page";
+        self.shadow_items[0] = "Add 1 Zombie to Round";
+        self.shadow_items[1] = "Add 5 Zombies to Round";
+        self.shadow_items[2] = "Add 10 Zombies to Round";
+        self.shadow_items[3] = "Zombies Queued: " + self shadow_spawn_pending_text();
         self.shadow_items[4] = "< Back";
     }
     else if (self.shadow_page == 26)
@@ -697,26 +828,77 @@ shadow_define_page()
         self.shadow_items[0] = "Red: " + self.shadow_color_r;
         self.shadow_items[1] = "Green: " + self.shadow_color_g;
         self.shadow_items[2] = "Blue: " + self.shadow_color_b;
-        self.shadow_items[3] = "Cycle Color Presets";
-        self.shadow_items[4] = "Restore Shadow Red";
+        self.shadow_items[3] = "Next Color Preset";
+        self.shadow_items[4] = "Restore Default Red";
         self.shadow_items[5] = "< Back";
+    }
+    else if (self.shadow_page == 28)
+    {
+        self shadow_add_weapon("zombie_cymbal_monkey", "Monkey Bombs");
+        self shadow_add_weapon("zombie_black_hole_bomb", "Gersh Device");
+        self shadow_add_weapon("zombie_nesting_dolls", "Matryoshka Dolls");
+        self shadow_add_weapon("frag_grenade_zm", "Frag Grenades");
+        self shadow_add_weapon("sticky_grenade_zm", "Semtex Grenades");
+        self shadow_add_weapon("claymore_zm", "Claymores");
+        if (self.shadow_items.size == 0)
+            self shadow_add_option("No special equipment on this map", "unavailable");
+        self shadow_add_option("< Back", "back");
     }
     else if (self.shadow_page == 27)
     {
-        self.shadow_items[0] = "Spawn Active Nuke";
+        self.shadow_items[0] = "Activate Nuke";
         self.shadow_items[1] = "Spawn Max Ammo";
         self.shadow_items[2] = "Spawn Insta-Kill";
         self.shadow_items[3] = "Spawn Double Points";
         self.shadow_items[4] = "Spawn Carpenter";
         self.shadow_items[5] = "Spawn Fire Sale";
-        self.shadow_items[6] = "< Back";
+        self.shadow_items[6] = "Spawn Bonfire Sale";
+        self.shadow_items[7] = "Spawn Free Perk";
+        self.shadow_items[8] = "Spawn Death Machine";
+        self.shadow_items[9] = "< Back";
     }
 }
 
 shadow_on_off(value)
 {
-    if (value) return "ON";
-    return "OFF";
+    if (value) return "^2ON";
+    return "^1OFF";
+}
+
+shadow_scroll_speed_name()
+{
+    if (self.shadow_key_repeat >= 180) return "Slow";
+    if (self.shadow_key_repeat >= 110) return "Normal";
+    return "Fast";
+}
+
+shadow_speed_name()
+{
+    if (self.shadow_speed_level == 1) return "1.5x";
+    if (self.shadow_speed_level == 2) return "2.0x";
+    if (self.shadow_speed_level == 3) return "3.0x";
+    return "Normal";
+}
+
+shadow_speed_scale()
+{
+    if (self.shadow_speed_level == 1) return 1.5;
+    if (self.shadow_speed_level == 2) return 2.0;
+    if (self.shadow_speed_level == 3) return 3.0;
+    return 1.0;
+}
+
+shadow_apply_movement_dvars()
+{
+    if (level.shadow_super_jump)
+        setDvar("jump_height", 175);
+    else
+        setDvar("jump_height", level.shadow_jump_default);
+
+    if (level.shadow_low_gravity)
+        setDvar("g_gravity", 400);
+    else
+        setDvar("g_gravity", level.shadow_gravity_default);
 }
 
 shadow_noclip_bind_name()
@@ -724,7 +906,61 @@ shadow_noclip_bind_name()
     if (self.shadow_noclip_bind == 1) return "MOUSE4";
     if (self.shadow_noclip_bind == 2) return "MOUSE5";
     if (self.shadow_noclip_bind == 3) return "F6";
-    return "OFF";
+    return "^1OFF";
+}
+
+
+shadow_cycle_noclip_bind()
+{
+    self.shadow_noclip_bind++;
+    if (self.shadow_noclip_bind > 3)
+        self.shadow_noclip_bind = 0;
+    if (self.shadow_noclip_active)
+        self.shadow_noclip_dirty = true;
+}
+
+shadow_request_noclip()
+{
+    self.shadow_noclip_active = !self.shadow_noclip_active;
+    self.shadow_noclip_toggle_pending = true;
+    self.shadow_noclip_dirty = true;
+    if (self.shadow_open)
+        self shadow_close();
+    else
+        self thread shadow_apply_noclip();
+}
+
+shadow_apply_noclip()
+{
+    self endon("disconnect");
+    wait 0.15;
+    if (!self.shadow_noclip_dirty && !self.shadow_noclip_toggle_pending)
+        return;
+
+    key = "";
+    if (self.shadow_noclip_active)
+        key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
+    command = "";
+    if (self.shadow_noclip_bound_key != "" &&
+        self.shadow_noclip_bound_key != key)
+        command = "unbind " + self.shadow_noclip_bound_key;
+    if (key != "")
+    {
+        if (command != "")
+            command += ";";
+        command += "bind " + key + " noclip";
+    }
+    if (self.shadow_noclip_toggle_pending)
+    {
+        if (command != "")
+            command += ";";
+        command += "noclip";
+    }
+    if (command != "")
+        self setClientDvar("activeAction", command);
+    self.shadow_noclip_bound_key = key;
+    self.shadow_noclip_dirty = false;
+    self.shadow_noclip_toggle_pending = false;
 }
 
 shadow_noclip_bind_key(value)
@@ -733,46 +969,6 @@ shadow_noclip_bind_key(value)
     if (value == 2) return "MOUSE5";
     if (value == 3) return "F6";
     return "";
-}
-
-shadow_cycle_noclip_bind()
-{
-    old_key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
-    self.shadow_noclip_bind++;
-    if (self.shadow_noclip_bind > 3)
-        self.shadow_noclip_bind = 0;
-    new_key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
-    if (self.shadow_noclip_active)
-    {
-        command = "";
-        if (old_key != "")
-            command = "unbind " + old_key;
-        if (new_key != "")
-        {
-            if (command != "")
-                command += ";";
-            command += "bind " + new_key + " noclip";
-        }
-        if (command != "")
-            self setClientDvar("activeAction", command);
-    }
-}
-
-shadow_request_noclip()
-{
-    self.shadow_noclip_active = !self.shadow_noclip_active;
-    key = self shadow_noclip_bind_key(self.shadow_noclip_bind);
-    if (self.shadow_noclip_active)
-    {
-        if (key != "")
-            self setClientDvar("activeAction", "bind " + key + " noclip;noclip");
-        else
-            self setClientDvar("activeAction", "noclip");
-    }
-    else if (key != "")
-        self setClientDvar("activeAction", "unbind " + key + ";noclip");
-    else
-        self setClientDvar("activeAction", "noclip");
 }
 
 shadow_fx_name()
@@ -786,33 +982,33 @@ shadow_fx_name()
 
 shadow_page_name()
 {
-    if (self.shadow_page == 1) return "PLAYER";
-    if (self.shadow_page == 2) return "WEAPONS";
-    if (self.shadow_page == 3) return "AMMO";
-    if (self.shadow_page == 4) return "ZOMBIES";
+    if (self.shadow_page == 1) return "PLAYER MODS";
+    if (self.shadow_page == 2) return "GIVE WEAPON";
+    if (self.shadow_page == 3) return "AMMO & UPGRADES";
+    if (self.shadow_page == 4) return "ZOMBIE OPTIONS";
     if (self.shadow_page == 5) return "POINTS";
-    if (self.shadow_page == 6) return "TELEPORT";
-    if (self.shadow_page == 7) return "AIMBOT";
-    if (self.shadow_page == 8) return "INFORMATION";
+    if (self.shadow_page == 6) return "TELEPORT MENU";
+    if (self.shadow_page == 7) return "AIMBOT & COMBAT";
+    if (self.shadow_page == 8) return "GAME INFO";
     if (self.shadow_page == 9) return "PERKS";
-    if (self.shadow_page == 10) return "WORLD / MAP";
-    if (self.shadow_page == 11) return "BINDS / THEME";
-    if (self.shadow_page == 12) return "ACHIEVEMENTS";
-    if (self.shadow_page == 13) return "ARSENAL / UPGRADES";
-    if (self.shadow_page == 14) return "ZOMBIES / POINTS";
-    if (self.shadow_page == 15) return "TELEPORT / WORLD";
-    if (self.shadow_page == 16) return "STATS / ACHIEVEMENTS";
-    if (self.shadow_page == 17) return "ROOM BOOKMARKS";
-    if (self.shadow_page == 18) return "FIVE / DEFCON";
-    if (self.shadow_page == 19) return "THEME / HUD";
-    if (self.shadow_page == 20) return "CONTROLS / HUD";
-    if (self.shadow_page == 21) return "SAFETY / PERFORMANCE";
-    if (self.shadow_page == 22) return "CUSTOM WEAPON FX";
-    if (self.shadow_page == 23) return "MAP LOCATIONS";
+    if (self.shadow_page == 10) return "WORLD MODS";
+    if (self.shadow_page == 11) return "MENU CONTROLS";
+    if (self.shadow_page == 12) return "LOCAL CHALLENGES";
+    if (self.shadow_page == 13) return "WEAPONS";
+    if (self.shadow_page == 14) return "ZOMBIES & POINTS";
+    if (self.shadow_page == 15) return "LOBBY MODS";
+    if (self.shadow_page == 16) return "EXTRAS";
+    if (self.shadow_page == 17) return "SAVED POSITIONS";
+    if (self.shadow_page == 18) return "FIVE CONTROLS";
+    if (self.shadow_page == 19) return "APPEARANCE";
+    if (self.shadow_page == 20) return "SETTINGS";
+    if (self.shadow_page == 21) return "PERFORMANCE";
+    if (self.shadow_page == 22) return "BULLET FX & ROUNDS";
+    if (self.shadow_page == 23) return "MAP TELEPORTS";
     if (self.shadow_page == 24) return "ZOMBIE SPAWNER";
-    if (self.shadow_page == 25) return "CHANGE MAP";
-    if (self.shadow_page == 26) return "CUSTOM COLORS";
-    if (self.shadow_page == 27) return "POWER-UPS / NUKES";
+    if (self.shadow_page == 26) return "MENU COLORS";
+    if (self.shadow_page == 27) return "POWER-UPS";
+    if (self.shadow_page == 28) return "EQUIPMENT";
     return "MAIN MENU";
 }
 
@@ -860,13 +1056,15 @@ shadow_door_count()
 shadow_power_available()
 {
     map = getDvar("mapname");
-    if (map == "zombie_theater" || map == "zombie_pentagon" ||
+    supported = map == "zombie_theater" || map == "zombie_pentagon" ||
         map == "zombie_cod5_factory" || map == "nazi_zombie_factory" ||
         map == "zombie_cod5_asylum" || map == "nazi_zombie_asylum" ||
         map == "zombie_cosmodrome" || map == "zombie_coast" ||
-        map == "zombie_temple" || map == "zombie_moon")
-        return true;
-    return false;
+        map == "zombie_temple" || map == "zombie_moon";
+    if (!supported || flag("power_on"))
+        return false;
+    triggers = getEntArray("use_power_switch", "targetname");
+    return triggers.size > 0;
 }
 
 shadow_world_available()
@@ -879,7 +1077,7 @@ shadow_ammo_mode_name()
     if (self.shadow_ammo_mode == 1) return "Explosive";
     if (self.shadow_ammo_mode == 2) return "Heavy";
     if (self.shadow_ammo_mode == 3) return "One-Hit";
-    if (self.shadow_ammo_mode == 4) return "Burn DOT";
+    if (self.shadow_ammo_mode == 4) return "Burn Damage";
     return "Normal";
 }
 
@@ -889,19 +1087,37 @@ shadow_paint_page()
         !isDefined(self.shadow_footer))
         return;
 
+    shown = self.shadow_items.size;
+    if (shown < 1)
+        shown = 1;
+    if (shown > self.shadow_visible_rows)
+        shown = self.shadow_visible_rows;
+    rule_y = 113 + (shown * 18) + 5;
+    self.shadow_footer_rule.y = rule_y;
+    self.shadow_footer_strip.y = rule_y + 3;
+    self.shadow_footer.y = rule_y + 9;
+    bg_height = rule_y - 49 + 45;
+    if (!isDefined(self.shadow_bg_height) || self.shadow_bg_height != bg_height)
+    {
+        self.shadow_bg setShader("white", 220, bg_height);
+        self.shadow_bg_height = bg_height;
+    }
+
     self.shadow_section setText(self shadow_page_name());
     if (self.shadow_key_mode == 0 && self.shadow_swap_horizontal)
-        self.shadow_footer setText("W/S MOVE   A SELECT   D BACK");
+        self.shadow_footer setText("^7             ^1[W/S] ^7NAV ^1[A/USE] ^7SELECT ^1[D] ^7BACK\n^7           ^1[MELEE] ^7BACK/CLOSE ^1[ADS+MELEE] ^7EXIT");
     else if (self.shadow_key_mode == 0)
-        self.shadow_footer setText("W/S MOVE   D SELECT   A BACK");
+        self.shadow_footer setText("^7             ^1[W/S] ^7NAV ^1[D/USE] ^7SELECT ^1[A] ^7BACK\n^7           ^1[MELEE] ^7BACK/CLOSE ^1[ADS+MELEE] ^7EXIT");
     else
-        self.shadow_footer setText("FIRE DOWN  ADS UP  USE SELECT");
+        self.shadow_footer setText("^7                  ^1[FIRE/ADS] ^7NAV ^1[USE] ^7SELECT\n^7           ^1[MELEE] ^7BACK/CLOSE ^1[ADS+MELEE] ^7EXIT");
 
     for (i = 0; i < self.shadow_visible_rows; i++)
     {
         item = i + self.shadow_window;
         if (item < self.shadow_items.size)
         {
+            self.shadow_rows[i] setText(self.shadow_items[item]);
+            self.shadow_rows[i].color = (1, 1, 1);
             self.shadow_rows[i].alpha = 1;
         }
         else
@@ -922,7 +1138,7 @@ shadow_paint_cursor()
     position = self.shadow_cursor - self.shadow_window;
     if (isDefined(self.shadow_selection))
     {
-        self.shadow_selection.y = 143 + (position * 24);
+        self.shadow_selection.y = 111 + (position * 18);
         if (self.shadow_selection_visible)
             self.shadow_selection.alpha = 0.94;
         else
@@ -934,48 +1150,85 @@ shadow_paint_cursor()
         if (self.shadow_items.size > 1)
             scroll_position = (self.shadow_cursor * (self.shadow_visible_rows - 1)) /
                 (self.shadow_items.size - 1);
-        self.shadow_scroll_thumb.y = 146 + (scroll_position * 24);
-        if (self.shadow_scrollbar_visible)
+        self.shadow_scroll_thumb.y = 115 + (scroll_position * 18);
+        if (self.shadow_scrollbar_visible &&
+            self.shadow_items.size > self.shadow_visible_rows)
             self.shadow_scroll_thumb.alpha = 0.95;
         else
             self.shadow_scroll_thumb.alpha = 0;
     }
     self.shadow_page_count setText((self.shadow_cursor + 1) + " / " + self.shadow_items.size);
-    for (i = 0; i < self.shadow_visible_rows; i++)
-    {
-        item = i + self.shadow_window;
-        if (item < self.shadow_items.size)
-        {
-            self.shadow_rows[i] setText("  " + self.shadow_items[item]);
-            self.shadow_rows[i].color = (1, 1, 1);
-        }
-    }
+}
+
+shadow_submenu_page(choice)
+{
+    if (!isDefined(choice))
+        return -1;
+    if (choice == "page_1") return 1;
+    if (choice == "page_2") return 2;
+    if (choice == "page_3") return 3;
+    if (choice == "page_4") return 4;
+    if (choice == "page_5") return 5;
+    if (choice == "page_6") return 6;
+    if (choice == "page_7") return 7;
+    if (choice == "page_8") return 8;
+    if (choice == "page_9") return 9;
+    if (choice == "page_10") return 10;
+    if (choice == "page_11") return 11;
+    if (choice == "page_12") return 12;
+    if (choice == "page_13") return 13;
+    if (choice == "page_14") return 14;
+    if (choice == "page_15") return 15;
+    if (choice == "page_16") return 16;
+    if (choice == "page_18") return 18;
+    if (choice == "page_19") return 19;
+    if (choice == "page_20") return 20;
+    if (choice == "page_21") return 21;
+    if (choice == "page_22") return 22;
+    if (choice == "page_27") return 27;
+    if (choice == "page_28") return 28;
+    return -1;
 }
 
 shadow_activate()
 {
     page = self.shadow_page;
     index = self.shadow_cursor;
-
-    if (page == 0)
-    {
-        choice = self.shadow_item_values[index];
-        if (choice == -1)
-            self shadow_close();
-        else
-            self shadow_change_page(choice);
+    if (index < 0 || index >= self.shadow_items.size)
         return;
+
+    choice = undefined;
+    if (index < self.shadow_item_values.size)
+        choice = self.shadow_item_values[index];
+
+    if ((page == 0 || page == 13 || page == 14 ||
+        page == 15 || page == 16 || page == 20) &&
+        isDefined(choice))
+    {
+        target_page = self shadow_submenu_page(choice);
+        if (target_page >= 0)
+        {
+            self shadow_change_page(target_page);
+            return;
+        }
     }
 
-    if (index == self.shadow_items.size - 1)
+    if (index == self.shadow_items.size - 1 &&
+        self.shadow_items[index] == "< Back")
     {
         self shadow_back();
         return;
     }
 
+    if (page == 0)
+        return;
+
     if (page == 13 || page == 14 || page == 15 || page == 16 || page == 20)
     {
-        self shadow_change_page(self.shadow_item_values[index]);
+        if (!isDefined(choice))
+            return;
+        if (choice == "map_shortcut")
+            self shadow_notice("^1SHADOW ^7Shift+M opens the map launcher");
         return;
     }
 
@@ -986,7 +1239,7 @@ shadow_activate()
             self.shadow_god = !self.shadow_god;
             if (self.shadow_god || self.shadow_menu_invuln_applied)
                 self enableInvulnerability();
-            else if (!self.shadow_god)
+            else
                 self disableInvulnerability();
         }
         else if (index == 1)
@@ -999,44 +1252,37 @@ shadow_activate()
         else if (index == 2)
             self shadow_request_noclip();
         else if (index == 3)
-            self shadow_cycle_noclip_bind();
-        else if (index == 4)
         {
-            self.shadow_speed = !self.shadow_speed;
-            if (!self.shadow_open)
-            {
-                if (self.shadow_speed)
-                    self setMoveSpeedScale(1.5);
-                else
-                    self setMoveSpeedScale(1);
-            }
+            self.shadow_speed_level++;
+            if (self.shadow_speed_level > 3)
+                self.shadow_speed_level = 0;
         }
-        else if (index == 5)
+        else if (index == 4)
         {
             if (isDefined(self.maxhealth))
                 self.health = self.maxhealth;
             else
                 self.health = 100;
-            self iPrintLn("^1SHADOW ^7Health restored");
+            self shadow_notice("^1SHADOW ^7Health restored");
         }
-        else if (index == 6)
-            self iPrintLn("^1SHADOW ^7Save and return with Teleport / World");
-        else if (index == 7)
+        else if (index == 5)
         {
             self.shadow_god = false;
             self.shadow_user_notarget = false;
-            self.shadow_speed = false;
+            self.shadow_speed_level = 0;
             if (self.shadow_noclip_active)
                 self shadow_request_noclip();
             self.ignoreme = self.shadow_was_ignored ||
                 (self.shadow_menu_auto_protect && self.shadow_open);
             if (!self.shadow_menu_invuln_applied)
                 self disableInvulnerability();
-            self iPrintLn("^1SHADOW ^7Player options reset");
+            self shadow_notice("^1SHADOW ^7Player settings reset");
         }
     }
-    else if (page == 2)
+    else if (page == 2 || page == 28)
     {
+        if (index >= self.shadow_item_values.size)
+            return;
         choice = self.shadow_item_values[index];
         if (choice != "unavailable")
             self shadow_give_weapon(choice, self.shadow_items[index]);
@@ -1044,67 +1290,65 @@ shadow_activate()
     else if (page == 3)
     {
         if (index == 0)
-        {
-            current = self getCurrentWeapon();
-            if (isDefined(current) && current != "none")
-                self giveMaxAmmo(current);
-            self iPrintLn("^1SHADOW ^7Ammo refilled");
-        }
+            self shadow_upgrade_current_weapon();
         else if (index == 1)
         {
-            self.shadow_auto_refill = !self.shadow_auto_refill;
+            current = self shadow_equipped_weapon();
+            if (isDefined(current) && current != "none")
+                self giveMaxAmmo(current);
+            self shadow_notice("^1SHADOW ^7Ammo refilled");
         }
         else if (index == 2)
-            self.shadow_infinite_clip = !self.shadow_infinite_clip;
-        else if (index == 3)
         {
-            self.shadow_ammo_mode++;
-            if (self.shadow_ammo_mode > 4)
-                self.shadow_ammo_mode = 0;
+            weapons = self getWeaponsListPrimaries();
+            for (i = 0; i < weapons.size && i < 4; i++)
+                self giveMaxAmmo(weapons[i]);
+            self shadow_notice("^1SHADOW ^7All carried weapons refilled");
         }
+        else if (index == 3)
+            self.shadow_auto_refill = !self.shadow_auto_refill;
         else if (index == 4)
+            self.shadow_infinite_clip = !self.shadow_infinite_clip;
+        else if (index == 5)
         {
-            current = self getCurrentWeapon();
+            current = self shadow_equipped_weapon();
             if (isDefined(current) && current != "none")
+            {
                 self takeWeapon(current);
+                self.shadow_last_hand_weapon = undefined;
+            }
         }
     }
     else if (page == 4)
     {
         if (index == 0)
-        {
             self thread shadow_clear_zombies();
-        }
         else if (index == 1)
-        {
             self.shadow_zombie_counter = !self.shadow_zombie_counter;
-            if (!self.shadow_zombie_counter && isDefined(self.shadow_count_hud))
-            {
-                self.shadow_count_hud destroy();
-                self.shadow_count_hud = undefined;
-            }
-        }
         else if (index == 2)
-            self.shadow_one_hit = !self.shadow_one_hit;
-        else if (index == 3)
         {
             zombies = getAiArray("axis");
-            self iPrintLn("^1SHADOW ^7Zombies alive: " + zombies.size);
+            self shadow_notice("^1SHADOW ^7Zombies alive: " + zombies.size);
         }
+        else if (index == 3)
+            self thread shadow_skip_round();
         else if (index == 4)
-            self shadow_print_round();
-        else if (index == 5)
             self shadow_change_page(24);
     }
     else if (page == 5)
     {
-        amount = 1000;
-        if (index == 1) amount = 5000;
-        if (index == 2) amount = 10000;
-        if (index == 3) amount = 50000;
-        if (index == 4) amount = 100000;
+        amount = 1337;
+        if (index == 1) amount = 1000;
+        if (index == 2) amount = 5000;
+        if (index == 3) amount = 10000;
+        if (index == 4) amount = 50000;
+        if (index == 5) amount = 100000;
+        if (index == 6) amount = 0 - self.score;
         self maps\_zombiemode_score::add_to_player_score(amount);
-        self iPrintLn("^1SHADOW ^7Points added: " + amount);
+        if (index == 6)
+            self shadow_notice("^1SHADOW ^7Points reset to 0");
+        else
+            self shadow_notice("^1SHADOW ^7Points added: " + amount);
     }
     else if (page == 6)
     {
@@ -1117,21 +1361,21 @@ shadow_activate()
         else if (index == 3)
         {
             self.shadow_saved_origin = self.origin;
-            self iPrintLn("^1SHADOW ^7Location saved");
+            self shadow_notice("^1SHADOW ^7Quick location saved");
         }
         else if (index == 4)
         {
             if (isDefined(self.shadow_saved_origin))
                 self shadow_warp(self.shadow_saved_origin, "saved position");
             else
-                self iPrintLn("^1SHADOW ^7Save a location first");
+                self shadow_notice("^1SHADOW ^7Save a location first");
         }
         else if (index == 5)
             self shadow_teleport_to_crosshair();
         else if (index == 6)
         {
-            self.shadow_saved_origin = undefined;
-            self iPrintLn("^1SHADOW ^7Saved location cleared");
+            self.shadow_spawn_origin = self.origin;
+            self shadow_notice("^1SHADOW ^7Return point set");
         }
     }
     else if (page == 7)
@@ -1149,17 +1393,19 @@ shadow_activate()
             else
                 self.shadow_aim_bone = "j_head";
         }
+        else if (index == 4)
+            self.shadow_one_hit = !self.shadow_one_hit;
     }
     else if (page == 8)
     {
         if (index == 0)
-            self iPrintLn("^1SHADOW ^7Map: " + getDvar("mapname"));
+            self shadow_notice("^1SHADOW ^7Map: " + getDvar("mapname"));
         else if (index == 1)
-            self iPrintLn("^1SHADOW ^7Weapon: " + self getCurrentWeapon());
+            self shadow_notice("^1SHADOW ^7Weapon: " + self getCurrentWeapon());
         else if (index == 2)
         {
             pos = self.origin;
-            self iPrintLn("^1SHADOW ^7X " + pos[0] + " Y " + pos[1] + " Z " + pos[2]);
+            self shadow_notice("^1SHADOW ^7X " + pos[0] + " Y " + pos[1] + " Z " + pos[2]);
         }
         else
             self shadow_print_round();
@@ -1169,30 +1415,45 @@ shadow_activate()
         choice = self.shadow_item_values[index];
         if (choice == "all_perks")
         {
-            for (i = 0; i < self.shadow_item_values.size - 3; i++)
-                self shadow_grant_perk(self.shadow_item_values[i]);
-            self iPrintLn("^1SHADOW ^7Available perks granted");
+            for (i = 0; i < self.shadow_item_values.size; i++)
+            {
+                perk = self.shadow_item_values[i];
+                if (perk != "all_perks" && perk != "clear_perks" && perk != "back")
+                    self shadow_grant_perk(perk);
+            }
+            self shadow_notice("^1SHADOW ^7Available perks granted");
         }
         else if (choice == "clear_perks")
         {
             self clearPerks();
-            self iPrintLn("^1SHADOW ^7Perks cleared");
+            self shadow_notice("^1SHADOW ^7Perks cleared");
         }
         else
         {
             self shadow_grant_perk(choice);
-            self iPrintLn("^1SHADOW ^7Perk granted: " + self.shadow_items[index]);
+            self shadow_notice("^1SHADOW ^7Perk granted: " + self.shadow_items[index]);
         }
     }
     else if (page == 10)
     {
         choice = self.shadow_item_values[index];
         if (choice == "doors")
-            self thread shadow_unlock_all_doors();
+            self thread shadow_unlock_all_doors(0);
+        else if (choice == "doors_only")
+            self thread shadow_unlock_all_doors(1);
+        else if (choice == "debris_only")
+            self thread shadow_unlock_all_doors(2);
         else if (choice == "power")
+            self thread shadow_turn_power_on();
+        else if (choice == "jump")
         {
-            flag_set("power_on");
-            self iPrintLn("^1SHADOW ^7Power activated");
+            level.shadow_super_jump = !level.shadow_super_jump;
+            self shadow_apply_movement_dvars();
+        }
+        else if (choice == "gravity")
+        {
+            level.shadow_low_gravity = !level.shadow_low_gravity;
+            self shadow_apply_movement_dvars();
         }
     }
     else if (page == 11)
@@ -1201,9 +1462,12 @@ shadow_activate()
             self.shadow_key_mode = !self.shadow_key_mode;
         else if (index == 1)
         {
-            self.shadow_key_repeat -= 35;
-            if (self.shadow_key_repeat < 60)
-                self.shadow_key_repeat = 200;
+            if (self.shadow_key_repeat >= 180)
+                self.shadow_key_repeat = 145;
+            else if (self.shadow_key_repeat >= 110)
+                self.shadow_key_repeat = 75;
+            else
+                self.shadow_key_repeat = 215;
         }
         else if (index == 2)
             self.shadow_invert_scroll = !self.shadow_invert_scroll;
@@ -1219,7 +1483,7 @@ shadow_activate()
             self.shadow_swap_horizontal = false;
             self.shadow_noclip_bind = 1;
             if (self.shadow_noclip_active)
-                self setClientDvar("activeAction", "unbind MOUSE5;unbind F6;bind MOUSE4 noclip");
+                self.shadow_noclip_dirty = true;
         }
     }
     else if (page == 17)
@@ -1229,7 +1493,7 @@ shadow_activate()
             if (isDefined(self.shadow_spawn_origin))
                 self shadow_warp(self.shadow_spawn_origin, "spawn");
             else
-                self iPrintLn("^1SHADOW ^7Spawn point unavailable");
+                self shadow_notice("^1SHADOW ^7Spawn point unavailable");
         }
         else
         {
@@ -1241,12 +1505,12 @@ shadow_activate()
             if (index == 0 || index == 2 || index == 4)
             {
                 self.shadow_room_slots[slot] = self.origin;
-                self iPrintLn("^1SHADOW ^7Room bookmark saved");
+                self shadow_notice("^1SHADOW ^7Room bookmark saved");
             }
             else if (isDefined(self.shadow_room_slots[slot]))
                 self shadow_warp(self.shadow_room_slots[slot], "room bookmark");
             else
-                self iPrintLn("^1SHADOW ^7Save this room slot first");
+                self shadow_notice("^1SHADOW ^7Save this room slot first");
         }
     }
     else if (page == 18)
@@ -1269,8 +1533,6 @@ shadow_activate()
         if (index == 0)
             self.shadow_selection_visible = !self.shadow_selection_visible;
         else if (index == 1)
-            self.shadow_scrollbar_visible = !self.shadow_scrollbar_visible;
-        else if (index == 2)
         {
             self shadow_change_page(26);
             return;
@@ -1330,11 +1592,7 @@ shadow_activate()
             self shadow_queue_zombies(5);
         else if (index == 2)
             self shadow_queue_zombies(10);
-        else if (index == 4)
-            self thread shadow_clear_zombies();
     }
-    else if (page == 25)
-        self iPrintLn("^1SHADOW ^7Press Shift+M to open the map launcher");
     else if (page == 26)
     {
         if (index == 0)
@@ -1348,9 +1606,9 @@ shadow_activate()
         else if (index == 4)
         {
             self.shadow_palette = 0;
-            self.shadow_color_r = 0.87;
-            self.shadow_color_g = 0.19;
-            self.shadow_color_b = 0.36;
+            self.shadow_color_r = 0.90;
+            self.shadow_color_g = 0.035;
+            self.shadow_color_b = 0.022;
         }
         self shadow_apply_theme();
     }
@@ -1368,6 +1626,12 @@ shadow_activate()
             self shadow_spawn_powerup("carpenter", false);
         else if (index == 5)
             self shadow_spawn_powerup("fire_sale", false);
+        else if (index == 6)
+            self shadow_spawn_powerup("bonfire_sale", false);
+        else if (index == 7)
+            self shadow_spawn_powerup("free_perk", false);
+        else if (index == 8)
+            self shadow_spawn_powerup("minigun", false);
     }
     else if (page == 12)
     {
@@ -1378,7 +1642,7 @@ shadow_activate()
             self.shadow_achievement_rich = true;
             self.shadow_achievement_century = true;
             self.shadow_achievement_banker = true;
-            self iPrintLn("^1SHADOW ^7All local badges unlocked (not platform awards)");
+            self shadow_notice("^1SHADOW ^7All local badges unlocked (not platform awards)");
         }
         else if (index == 7)
         {
@@ -1387,10 +1651,10 @@ shadow_activate()
             self.shadow_achievement_rich = false;
             self.shadow_achievement_century = false;
             self.shadow_achievement_banker = false;
-            self iPrintLn("^1SHADOW ^7Local badges reset");
+            self shadow_notice("^1SHADOW ^7Local badges reset");
         }
         else
-            self iPrintLn("^1SHADOW ^7Local session badges, not platform achievements");
+            self shadow_notice("^1SHADOW ^7Local session badges, not platform achievements");
     }
 
     self shadow_define_page();
@@ -1404,9 +1668,9 @@ shadow_activate()
 shadow_print_round()
 {
     if (isDefined(level.round_number))
-        self iPrintLn("^1SHADOW ^7Round: " + level.round_number);
+        self shadow_notice("^1SHADOW ^7Round: " + level.round_number);
     else
-        self iPrintLn("^1SHADOW ^7Round information unavailable");
+        self shadow_notice("^1SHADOW ^7Round information unavailable");
 }
 
 shadow_spawn_pending_text()
@@ -1418,36 +1682,34 @@ shadow_spawn_pending_text()
 
 shadow_queue_zombies(amount)
 {
-    // The round manager handles spawns. Keep the queue capped.
     if (!isDefined(level.zombie_total) || !isDefined(level.enemy_spawns) ||
         level.enemy_spawns.size == 0)
     {
-        self iPrintLn("^1SHADOW ^7Map spawner not ready");
+        self shadow_notice("^1SHADOW ^7Map spawner not ready");
         return;
     }
     if (level.zombie_total + amount > 50)
     {
-        self iPrintLn("^1SHADOW ^7Spawn queue capped at 50");
+        self shadow_notice("^1SHADOW ^7Spawn queue capped at 50");
         return;
     }
     level.zombie_total += amount;
-    self iPrintLn("^1SHADOW ^7Queued " + amount + " zombies through round spawner");
+    self shadow_notice("^1SHADOW ^7Queued " + amount + " zombies through round spawner");
 }
 
 shadow_warp(position, label)
 {
     if (!isDefined(position))
     {
-        self iPrintLn("^1SHADOW ^7Teleport destination unavailable");
+        self shadow_notice("^1SHADOW ^7Teleport destination unavailable");
         return;
     }
 
-    // Move the lock anchor before teleporting.
     if (self.shadow_open)
         self.shadow_lock_origin = position;
     self setVelocity((0, 0, 0));
     self setOrigin(position);
-    self iPrintLn("^1SHADOW ^7Teleported: " + label);
+    self shadow_notice("^1SHADOW ^7Teleported: " + label);
 }
 
 shadow_add_map_spot(label, position)
@@ -1456,7 +1718,7 @@ shadow_add_map_spot(label, position)
         return;
     index = self.shadow_items.size;
     self.shadow_map_spots[index] = position;
-    self shadow_add_option(label, index);
+    self shadow_add_option(label, "spot");
 }
 
 shadow_perk_spot_name(perk)
@@ -1476,10 +1738,11 @@ shadow_build_map_spots()
 {
     self.shadow_map_spots = [];
     if (isDefined(self.shadow_spawn_origin))
-        self shadow_add_map_spot("Starting Room", self.shadow_spawn_origin);
+        self shadow_add_map_spot("Return Point", self.shadow_spawn_origin);
 
-    // Build destinations from the current map's entities.
-    power = getEntArray("use_elec_switch", "targetname");
+    power = getEntArray("use_power_switch", "targetname");
+    if (power.size == 0)
+        power = getEntArray("use_elec_switch", "targetname");
     if (power.size > 0 && isDefined(power[0].origin))
         self shadow_add_map_spot("Power Switch", power[0].origin + (0, 0, 36));
     upgrade = getEntArray("zombie_vending_upgrade", "targetname");
@@ -1503,15 +1766,16 @@ shadow_five_status()
 {
     if (getDvar("mapname") != "zombie_pentagon")
     {
-        self iPrintLn("^1SHADOW ^7Five features unavailable on this map");
+        self shadow_notice("^1SHADOW ^7Five features unavailable on this map");
         return;
     }
+    power_status = "OFF";
     if (flag("power_on"))
-        self iPrintLn("^1SHADOW ^7Power: ON");
-    else
-        self iPrintLn("^1SHADOW ^7Power: OFF");
+        power_status = "ON";
     if (isDefined(level.defcon_level))
-        self iPrintLn("^1SHADOW ^7DEFCON: " + level.defcon_level);
+        self shadow_notice("^1SHADOW ^7Power " + power_status + " / DEFCON " + level.defcon_level);
+    else
+        self shadow_notice("^1SHADOW ^7Power " + power_status);
 }
 
 shadow_five_auto_defcon()
@@ -1523,18 +1787,18 @@ shadow_five_auto_defcon()
         return;
     if (!flag("power_on"))
     {
-        self iPrintLn("^1SHADOW ^7Five: activate power first");
+        self shadow_notice("^1SHADOW ^7Five: activate power first");
         return;
     }
     if (flag("defcon_active"))
     {
-        self iPrintLn("^1SHADOW ^7DEFCON already active - use a teleporter");
+        self shadow_notice("^1SHADOW ^7DEFCON already active - use a teleporter");
         return;
     }
     switches = getEntArray("punch_switch", "targetname");
     if (switches.size < 4)
     {
-        self iPrintLn("^1SHADOW ^7DEFCON switches not initialized");
+        self shadow_notice("^1SHADOW ^7DEFCON switches not initialized");
         return;
     }
     self.shadow_busy_defcon = true;
@@ -1546,9 +1810,9 @@ shadow_five_auto_defcon()
         wait 0.26;
     }
     if (flag("defcon_active"))
-        self iPrintLn("^1SHADOW ^7DEFCON 5: Pack-a-Punch route active");
+        self shadow_notice("^1SHADOW ^7DEFCON 5: Pack-a-Punch route active");
     else
-        self iPrintLn("^1SHADOW ^7DEFCON not ready; try the War Room switches");
+        self shadow_notice("^1SHADOW ^7DEFCON not ready; try the War Room switches");
     self.shadow_busy_defcon = false;
 }
 
@@ -1567,31 +1831,104 @@ shadow_five_warp(spot)
     {
         if (!flag("defcon_active"))
         {
-            self iPrintLn("^1SHADOW ^7Open DEFCON 5 before entering Pack room");
+            self shadow_notice("^1SHADOW ^7Open DEFCON 5 before entering Pack room");
             return;
         }
         if (isDefined(level.portal_pack))
             self shadow_warp(level.portal_pack.origin + (0, 0, 38), "Panic Room");
         else
-            self iPrintLn("^1SHADOW ^7Panic Room portal not ready");
+            self shadow_notice("^1SHADOW ^7Panic Room portal not ready");
     }
     else
-        self iPrintLn("^1SHADOW ^7Five portal not ready (power may be off)");
+        self shadow_notice("^1SHADOW ^7Five portal not ready (power may be off)");
 }
 
 shadow_give_weapon(name, label)
 {
-    if (name != "minigun_zm" &&
-        (!isDefined(level.zombie_weapons) ||
-        !isDefined(level.zombie_weapons[name])))
+    if (!isDefined(level.zombie_weapons) ||
+        !isDefined(level.zombie_weapons[name]) ||
+        !isDefined(level.zombie_include_weapons) ||
+        !isDefined(level.zombie_include_weapons[name]))
     {
-        self iPrintLn("^1SHADOW ^7Weapon unavailable on this map");
+        self shadow_notice("^1SHADOW ^7Weapon not registered on this map");
         return;
     }
-    self giveWeapon(name);
-    self giveMaxAmmo(name);
-    self switchToWeapon(name);
-    self iPrintLn("^1SHADOW ^7" + label + " (if available on this map)");
+
+    if (self hasWeapon(name))
+    {
+        self giveMaxAmmo(name);
+        self shadow_notice("^1SHADOW ^7Ammo refilled: " + label);
+        return;
+    }
+
+    self maps\_zombiemode_weapons::weapon_give(name);
+    if (self hasWeapon(name))
+        self shadow_notice("^1SHADOW ^7Equipped: " + label);
+    else
+        self shadow_notice("^1SHADOW ^7Game rejected this item");
+}
+
+shadow_equipped_weapon()
+{
+    current = self getCurrentWeapon();
+    if (!isDefined(current) || current == "none" || !self hasWeapon(current))
+        current = self.shadow_last_hand_weapon;
+    if (isDefined(current) && current != "none" && self hasWeapon(current))
+        return current;
+    return "none";
+}
+
+shadow_upgrade_current_weapon()
+{
+    current = self getCurrentWeapon();
+    if (!isDefined(current) || current == "none" || !self hasWeapon(current))
+        current = self.shadow_last_hand_weapon;
+    if (!isDefined(current) || current == "none" || !self hasWeapon(current))
+    {
+        self shadow_notice("^1SHADOW ^7No equipped weapon found");
+        return;
+    }
+
+    if (current == "microwavegun_zm" && self hasWeapon("microwavegundw_zm"))
+        current = "microwavegundw_zm";
+
+    if (!isDefined(level.zombie_weapons) ||
+        !isDefined(level.zombie_weapons[current]) ||
+        !isDefined(level.zombie_weapons[current].upgrade_name) ||
+        self maps\_zombiemode_weapons::is_weapon_upgraded(current))
+    {
+        self shadow_notice("^1SHADOW ^7Already upgraded or not Pack-a-Punchable");
+        return;
+    }
+    upgraded = level.zombie_weapons[current].upgrade_name;
+    if (!isDefined(upgraded) || upgraded == "" || upgraded == current)
+    {
+        self shadow_notice("^1SHADOW ^7No Pack-a-Punch version on this map");
+        return;
+    }
+
+    old_clip = self getWeaponAmmoClip(current);
+    old_stock = self getWeaponAmmoStock(current);
+    self takeWeapon(current);
+    self giveWeapon(upgraded, 0,
+        self maps\_zombiemode_weapons::get_pack_a_punch_weapon_options(upgraded));
+    if (!self hasWeapon(upgraded))
+    {
+        self giveWeapon(current);
+        if (self hasWeapon(current))
+        {
+            self setWeaponAmmoClip(current, old_clip);
+            self setWeaponAmmoStock(current, old_stock);
+            self switchToWeapon(current);
+        }
+        self shadow_notice("^1SHADOW ^7Upgrade failed; original weapon restored");
+        return;
+    }
+
+    self giveStartAmmo(upgraded);
+    self switchToWeapon(upgraded);
+    self.shadow_last_hand_weapon = upgraded;
+    self shadow_notice("^1SHADOW ^7Pack-a-Punched equipped weapon");
 }
 
 shadow_grant_perk(perk)
@@ -1622,9 +1959,9 @@ shadow_refill_loop()
             }
         }
         if (self.shadow_auto_refill || self.shadow_infinite_clip)
-            wait 0.18;
+            wait 0.25;
         else
-            wait 0.60;
+            wait 1.0;
     }
 }
 
@@ -1640,7 +1977,7 @@ shadow_ammo_effect_loop()
             !self.shadow_shoot_tp)
         {
             last_attack = false;
-            wait 0.18;
+            wait 0.55;
             continue;
         }
         attack = self attackButtonPressed();
@@ -1658,7 +1995,8 @@ shadow_ammo_effect_loop()
                 if (self.shadow_nuke_rounds)
                     self shadow_trigger_shot_nuke();
                 if (self.shadow_fx_enabled &&
-                    getTime() - self.shadow_last_fx >= 220)
+                    getTime() - self.shadow_last_fx >=
+                    self shadow_fx_cooldown())
                 {
                     self.shadow_last_fx = getTime();
                     self shadow_impact_fx(hit);
@@ -1678,7 +2016,8 @@ shadow_ammo_effect_loop()
                             victim doDamage(1250, hit, self);
                         else if (self.shadow_ammo_mode == 3)
                             victim doDamage(victim.health + 1000, hit, self);
-                        else if (self.shadow_ammo_mode == 4)
+                        else if (self.shadow_ammo_mode == 4 &&
+                            (!isDefined(victim.shadow_burn_active) || !victim.shadow_burn_active))
                             self thread shadow_burn_target(victim);
                     }
                 }
@@ -1704,7 +2043,6 @@ shadow_ammo_effect_loop()
 
 shadow_impact_fx(hit)
 {
-    // Skip effects that the map has not loaded.
     if (!isDefined(level._effect))
         return;
     if (self.shadow_fx_style == 0 && isDefined(level._effect["def_explosion"]))
@@ -1731,7 +2069,11 @@ shadow_burn_target(victim)
     for (tick = 0; tick < 5; tick++)
     {
         if (!isDefined(victim) || !isAlive(victim))
+        {
+            if (isDefined(victim))
+                victim.shadow_burn_active = false;
             return;
+        }
         victim doDamage(75, victim.origin, self);
         wait 0.35;
     }
@@ -1748,16 +2090,16 @@ shadow_one_hit_loop()
         if (self.shadow_one_hit)
         {
             zombies = getAiArray("axis");
-            for (i = 0; i < zombies.size; i++)
+            for (i = 0; i < zombies.size && i < 128; i++)
             {
                 if (isDefined(zombies[i]) && isAlive(zombies[i]) && zombies[i].health > 1)
                     zombies[i].health = 1;
             }
         }
         if (self.shadow_one_hit)
-            wait 0.5;
+            wait 0.75;
         else
-            wait 1.0;
+            wait 1.5;
     }
 }
 
@@ -1771,40 +2113,64 @@ shadow_achievement_loop()
             !self.shadow_achievement_survivor)
         {
             self.shadow_achievement_survivor = true;
-            self iPrintLn("^1SHADOW GARDEN ^7Challenge: Survivor V");
+            self shadow_notice("^1SHADOW GARDEN ^7Challenge: Survivor V");
         }
         if (isDefined(level.round_number) && level.round_number >= 10 &&
             !self.shadow_achievement_veteran)
         {
             self.shadow_achievement_veteran = true;
-            self iPrintLn("^1SHADOW GARDEN ^7Challenge: Veteran X");
+            self shadow_notice("^1SHADOW GARDEN ^7Challenge: Veteran X");
         }
         if (isDefined(self.score) && self.score >= 10000 &&
             !self.shadow_achievement_rich)
         {
             self.shadow_achievement_rich = true;
-            self iPrintLn("^1SHADOW GARDEN ^7Challenge: Wealth 10K");
+            self shadow_notice("^1SHADOW GARDEN ^7Challenge: Wealth 10K");
         }
         if (isDefined(self.kills) && self.kills >= 100 &&
             !self.shadow_achievement_century)
         {
             self.shadow_achievement_century = true;
-            self iPrintLn("^1SHADOW GARDEN ^7Challenge: Hunter 100");
+            self shadow_notice("^1SHADOW GARDEN ^7Challenge: Hunter 100");
         }
         if (isDefined(self.score) && self.score >= 100000 &&
             !self.shadow_achievement_banker)
         {
             self.shadow_achievement_banker = true;
-            self iPrintLn("^1SHADOW GARDEN ^7Challenge: Banker 100K");
+            self shadow_notice("^1SHADOW GARDEN ^7Challenge: Banker 100K");
         }
-        wait 2;
+        wait 4;
     }
+}
+
+shadow_create_counter_hud()
+{
+    self.shadow_count_hud = newClientHudElem(self);
+    self.shadow_count_hud.horzAlign = "left";
+    self.shadow_count_hud.vertAlign = "top";
+    self.shadow_count_hud.alignX = "left";
+    self.shadow_count_hud.alignY = "top";
+    self.shadow_count_hud.x = 18;
+    self.shadow_count_hud.y = 121;
+    self.shadow_count_hud.font = "default";
+    self.shadow_count_hud.fontScale = 1.05;
+    self.shadow_count_hud.color = self shadow_accent();
+    self.shadow_count_hud.alpha = 1;
+    self.shadow_count_hud.sort = 8;
+    self.shadow_count_hud.hideWhenInMenu = false;
+    self.shadow_count_hud setText("ZOMBIES  0");
+}
+
+shadow_remove_counter_hud()
+{
+    if (isDefined(self.shadow_count_hud))
+        self.shadow_count_hud destroy();
+    self.shadow_count_hud = undefined;
 }
 
 shadow_counter_loop()
 {
     self endon("disconnect");
-
     last_count = -1;
     while (self.shadow_running)
     {
@@ -1812,11 +2178,9 @@ shadow_counter_loop()
         {
             if (!isDefined(self.shadow_count_hud))
             {
-                self.shadow_count_hud = self shadow_text("ZOMBIES  0", 18, 121,
-                    0.70, self shadow_accent(), 8);
+                self shadow_create_counter_hud();
                 last_count = -1;
             }
-
             zombies = getAiArray("axis");
             if (last_count != zombies.size)
             {
@@ -1827,13 +2191,9 @@ shadow_counter_loop()
         else
         {
             if (isDefined(self.shadow_count_hud))
-            {
-                self.shadow_count_hud destroy();
-                self.shadow_count_hud = undefined;
-            }
+                self shadow_remove_counter_hud();
             last_count = -1;
         }
-
         wait 0.5;
     }
 }
@@ -1841,46 +2201,60 @@ shadow_counter_loop()
 shadow_aimbot_loop()
 {
     self endon("disconnect");
-
     old_attack = false;
-    for (;;)
+
+    while (self.shadow_running)
     {
-        if ((!self.shadow_classic_aimbot && !self.shadow_unfair_aimbot) ||
-            self.shadow_open)
+        if (self.shadow_open ||
+            (!self.shadow_classic_aimbot && !self.shadow_unfair_aimbot))
         {
+            self.shadow_aim_target = undefined;
             old_attack = false;
-            wait 0.18;
+            wait 0.55;
             continue;
         }
-        attack = self attackButtonPressed();
 
+        attack = self attackButtonPressed();
         aim_active = self.shadow_classic_aimbot &&
             (self adsButtonPressed() || self.shadow_aim_always);
-        shoot_active = self.shadow_unfair_aimbot && attack && !old_attack;
+        shoot_active = self.shadow_unfair_aimbot && attack && !old_attack &&
+            getTime() - self.shadow_unfair_last_shot >= 280;
 
         if (aim_active || shoot_active)
         {
-            target = self shadow_nearest_zombie();
-            if (isDefined(target))
+            if (getTime() >= self.shadow_aim_next_scan ||
+                !isDefined(self.shadow_aim_target) ||
+                !isAlive(self.shadow_aim_target))
             {
-                hit = target getTagOrigin(self.shadow_aim_bone);
+                self.shadow_aim_target = self shadow_nearest_zombie();
+                self.shadow_aim_next_scan = getTime() + 250;
+            }
+
+            target = self.shadow_aim_target;
+            if (isDefined(target) && isAlive(target) &&
+                distance(self.origin, target.origin) < 4200)
+            {
+                hit = target.origin + (0, 0, 37);
+                if (self.shadow_aim_bone == "j_head")
+                    hit = target.origin + (0, 0, 55);
+
                 if (aim_active)
-                {
-                    eye = self getEye();
-                    self setPlayerAngles(vectorToAngles(hit - eye));
-                }
+                    self setPlayerAngles(vectorToAngles(hit - self getEye()));
 
                 if (shoot_active)
                 {
                     weapon = self getCurrentWeapon();
-                    if (isDefined(weapon) && weapon != "none")
-                        MagicBullet(weapon, hit + (0, 0, 5), hit, self);
+                    if (isDefined(weapon) && weapon != "none" && target.health > 0)
+                    {
+                        self.shadow_unfair_last_shot = getTime();
+                        target doDamage(target.health + 100, hit, self);
+                    }
                 }
             }
         }
 
         old_attack = attack;
-        wait 0.05;
+        wait 0.075;
     }
 }
 
@@ -1888,14 +2262,12 @@ shadow_nearest_zombie()
 {
     zombies = getAiArray("axis");
     best = undefined;
-    best_distance = 100000000;
-
-    for (i = 0; i < zombies.size; i++)
+    best_distance = 4200;
+    for (i = 0; i < zombies.size && i < 112; i++)
     {
         zombie = zombies[i];
         if (!isDefined(zombie) || !isAlive(zombie))
             continue;
-
         d = distance(self.origin, zombie.origin);
         if (d < best_distance)
         {
@@ -1903,7 +2275,6 @@ shadow_nearest_zombie()
             best = zombie;
         }
     }
-
     return best;
 }
 
@@ -1923,8 +2294,44 @@ shadow_clear_zombies()
 
         wait 0.05;
     }
-    self iPrintLn("^1SHADOW ^7Spawned zombies cleared");
+    self shadow_notice("^1SHADOW ^7Spawned zombies cleared");
     self.shadow_busy_clear = false;
+}
+
+shadow_skip_round()
+{
+    self endon("disconnect");
+
+    if (!isDefined(level.round_number) || !flag("begin_spawning") ||
+        is_true(level.intermission) || is_true(level.dog_intermission))
+    {
+        self shadow_notice("^1SHADOW ^7Wait for an active round");
+        return;
+    }
+    if ((isDefined(level.shadow_skip_round_busy) && level.shadow_skip_round_busy) ||
+        (isDefined(level.shadow_last_round_skip) &&
+        getTime() - level.shadow_last_round_skip < 3000))
+        return;
+
+    level.shadow_skip_round_busy = true;
+    level.shadow_last_round_skip = getTime();
+    old_round = level.round_number;
+
+    level.zombie_total = 0;
+    for (pass = 0; pass < 4; pass++)
+    {
+        zombies = getAiArray("axis");
+        for (i = 0; i < zombies.size && i < 128; i++)
+        {
+            if (isDefined(zombies[i]) && isAlive(zombies[i]))
+                zombies[i] doDamage(zombies[i].health + 1000, zombies[i].origin, self);
+        }
+        wait 0.10;
+    }
+    if (level.round_number == old_round)
+        level.zombie_total = 0;
+    level.shadow_skip_round_busy = false;
+    self shadow_notice("^1SHADOW ^7Round " + old_round + " cleared; advancing");
 }
 
 shadow_accent()
@@ -1947,9 +2354,9 @@ shadow_next_palette()
         self.shadow_palette = 0;
     if (self.shadow_palette == 0)
     {
-        self.shadow_color_r = 0.87;
-        self.shadow_color_g = 0.19;
-        self.shadow_color_b = 0.36;
+        self.shadow_color_r = 0.90;
+        self.shadow_color_g = 0.035;
+        self.shadow_color_b = 0.022;
     }
     else if (self.shadow_palette == 1)
     {
@@ -1989,6 +2396,8 @@ shadow_apply_theme()
         self.shadow_edge.color = self shadow_accent();
     if (isDefined(self.shadow_rule))
         self.shadow_rule.color = self shadow_accent();
+    if (isDefined(self.shadow_footer_rule))
+        self.shadow_footer_rule.color = self shadow_accent();
     if (isDefined(self.shadow_scroll_thumb))
         self.shadow_scroll_thumb.color = self shadow_accent();
     self shadow_paint_cursor();
@@ -1999,12 +2408,12 @@ shadow_spawn_powerup(type, activate)
     if (!isDefined(level.zombie_powerups) ||
         !isDefined(level.zombie_powerups[type]))
     {
-        self iPrintLn("^1SHADOW ^7Power-up unavailable on this map");
+        self shadow_notice("^1SHADOW ^7Power-up unavailable on this map");
         return false;
     }
     if (getTime() - self.shadow_last_powerup_drop < 1200)
     {
-        self iPrintLn("^1SHADOW ^7Wait before spawning another power-up");
+        self shadow_notice("^1SHADOW ^7Wait before spawning another power-up");
         return false;
     }
     self.shadow_last_powerup_drop = getTime();
@@ -2013,7 +2422,7 @@ shadow_spawn_powerup(type, activate)
     else
         point = self.origin + (anglesToForward(self getPlayerAngles()) * 96);
     level thread maps\_zombiemode_powerups::specific_powerup_drop(type, point);
-    self iPrintLn("^1SHADOW ^7Power-up spawned: " + type);
+    self shadow_notice("^1SHADOW ^7Power-up spawned: " + type);
     return true;
 }
 
@@ -2037,7 +2446,7 @@ shadow_teleport_to_crosshair()
     if (!isDefined(trace) || !isDefined(trace["position"]) ||
         (isDefined(trace["fraction"]) && trace["fraction"] >= 1))
     {
-        self iPrintLn("^1SHADOW ^7No safe crosshair surface found");
+        self shadow_notice("^1SHADOW ^7No safe crosshair surface found");
         return;
     }
 
@@ -2047,39 +2456,101 @@ shadow_teleport_to_crosshair()
     self shadow_warp(landing, "crosshair impact");
 }
 
-shadow_unlock_all_doors()
+shadow_unlock_all_doors(mode)
 {
     self endon("disconnect");
-
     if (self.shadow_busy_doors)
         return;
     self.shadow_busy_doors = true;
-
-    total = 0;
-    doors = getEntArray("zombie_door", "targetname");
-    for (i = 0; i < doors.size && i < 96; i++)
+    if (!flag("begin_spawning"))
     {
-        if (isDefined(doors[i]))
-        {
-            doors[i] notify("trigger", self);
-            total++;
-        }
-        wait 0.05;
+        self shadow_notice("^1SHADOW ^7Wait for map blockers to initialize");
+        self.shadow_busy_doors = false;
+        return;
     }
 
-    debris = getEntArray("zombie_debris", "targetname");
-    for (i = 0; i < debris.size && i < 96; i++)
+    previous_unlock = getDvarInt("zombie_unlock_all");
+    if (!isDefined(level.shadow_unlock_serial))
+        level.shadow_unlock_serial = 0;
+    level.shadow_unlock_serial++;
+    level thread shadow_restore_unlock_failsafe(previous_unlock,
+        level.shadow_unlock_serial);
+    setDvar("zombie_unlock_all", 1);
+    count = 0;
+    if (mode != 2)
     {
-        if (isDefined(debris[i]))
-        {
-            debris[i] notify("trigger", self);
-            total++;
-        }
-        wait 0.05;
+        count += self shadow_open_blockers("zombie_door");
+        count += self shadow_open_blockers("zombie_doors");
     }
-
-    self iPrintLn("^1SHADOW ^7Triggered " + total + " door/debris objects");
+    if (mode != 1)
+    {
+        count += self shadow_open_blockers("zombie_debris");
+        count += self shadow_open_blockers("zombie_airlock_buy");
+        count += self shadow_open_blockers("buyable_stairs");
+    }
+    wait 0.15;
+    setDvar("zombie_unlock_all", previous_unlock);
     self.shadow_busy_doors = false;
+    if (count == 0)
+        self shadow_notice("^1SHADOW ^7No compatible unopened blockers found");
+    else
+        self shadow_notice("^1SHADOW ^7Sent " + count + " forced opening requests");
+}
+
+shadow_open_blockers(name)
+{
+    blockers = getEntArray(name, "targetname");
+    count = 0;
+    for (i = 0; i < blockers.size && i < 96; i++)
+    {
+        blocker = blockers[i];
+        if (!isDefined(blocker))
+            continue;
+        if (isDefined(blocker._door_open) && blocker._door_open)
+            continue;
+        blocker notify("trigger", self, true);
+        count++;
+        wait 0.025;
+    }
+    return count;
+}
+
+shadow_restore_unlock_failsafe(previous, serial)
+{
+    wait 18;
+    if (level.shadow_unlock_serial == serial &&
+        getDvarInt("zombie_unlock_all") == 1 && previous != 1)
+        setDvar("zombie_unlock_all", previous);
+}
+
+shadow_turn_power_on()
+{
+    self endon("disconnect");
+    if (flag("power_on"))
+    {
+        self shadow_notice("^1SHADOW ^7Power is already on");
+        return;
+    }
+    if (!flag("begin_spawning"))
+    {
+        self shadow_notice("^1SHADOW ^7Wait for map power to initialize");
+        return;
+    }
+    switches = getEntArray("use_power_switch", "targetname");
+    if (switches.size == 0)
+        switches = getEntArray("use_elec_switch", "targetname");
+    if (switches.size == 0)
+    {
+        self shadow_notice("^1SHADOW ^7No scripted power switch on this map");
+        return;
+    }
+
+    switches[0] notify("trigger", self);
+    wait 0.90;
+    if (flag("power_on"))
+        self shadow_notice("^1SHADOW ^7Map power is now ON");
+    else
+        self shadow_notice("^1SHADOW ^7Map rejected power request");
 }
 
 shadow_center_text(value, x, y, scale, rgb, sort)
@@ -2120,24 +2591,46 @@ shadow_center_bar(x, y, width, height, rgb, alpha, sort)
     return elem;
 }
 
-shadow_text(value, x, y, scale, rgb, sort)
+shadow_fx_cooldown()
 {
-    elem = newClientHudElem(self);
-    elem.horzAlign = "left";
-    elem.vertAlign = "top";
-    elem.alignX = "left";
-    elem.alignY = "top";
-    elem.x = x;
-    elem.y = y;
-    elem.font = "default";
-    if (scale < 1.0)
-        scale = 1.05;
-    elem.fontScale = scale;
-    elem setText(value);
-    elem.color = rgb;
-    elem.alpha = 1;
-    elem.sort = sort;
-    elem.hideWhenInMenu = false;
-    return elem;
+    if (self.shadow_low_effects)
+        return 900;
+    return 300;
 }
 
+shadow_notice(value)
+{
+    if (!isDefined(self.shadow_notice_bg))
+    {
+        self.shadow_notice_bg = newClientHudElem(self);
+        self.shadow_notice_bg.horzAlign = "left";
+        self.shadow_notice_bg.vertAlign = "bottom";
+        self.shadow_notice_bg.alignX = "left";
+        self.shadow_notice_bg.alignY = "bottom";
+        self.shadow_notice_bg.x = 20;
+        self.shadow_notice_bg.y = -128;
+        self.shadow_notice_bg.color = self shadow_accent();
+        self.shadow_notice_bg.sort = 25;
+        self.shadow_notice_bg setShader("white", 120, 2);
+        self.shadow_notice_bg.hideWhenInMenu = false;
+
+        self.shadow_notice_text = newClientHudElem(self);
+        self.shadow_notice_text.horzAlign = "left";
+        self.shadow_notice_text.vertAlign = "bottom";
+        self.shadow_notice_text.alignX = "left";
+        self.shadow_notice_text.alignY = "bottom";
+        self.shadow_notice_text.x = 20;
+        self.shadow_notice_text.y = -144;
+        self.shadow_notice_text.font = "default";
+        self.shadow_notice_text.fontScale = 0.96;
+        self.shadow_notice_text.color = (1, 1, 1);
+        self.shadow_notice_text.sort = 26;
+        self.shadow_notice_text.hideWhenInMenu = false;
+    }
+
+    self.shadow_notice_bg.alpha = 1;
+    self.shadow_notice_text.alpha = 1;
+    self.shadow_notice_bg.color = self shadow_accent();
+    self.shadow_notice_text setText(value);
+    self.shadow_notice_expires = getTime() + 5500;
+}

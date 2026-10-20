@@ -49,5 +49,4 @@ shadow_attach()
 
     self.shadow_attached = true;
     self thread maps\mod_shadow\_shadow_menu::shadow_player_init();
-    self thread maps\shadow\_user::main();
 }
