@@ -1,3 +1,10 @@
+
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/745736ea-8bdd-43fb-8a2c-0ca183bdde58" alt="" height="300">
+</div>
+
+
+
 # Shadow Garden GSC
 
 **Black Ops Zombies menu for the browser game at [vel.gg/bsz](https://vel.gg/bsz)**
